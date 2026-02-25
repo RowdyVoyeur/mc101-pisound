@@ -4,7 +4,7 @@ A portable device to add an Audio Input to the Roland MC-101, using Raspberry Pi
 ## Settings
 
 ### Pisound Button
-- [1](https://github.com/RowdyVoyeur/midi-tools/blob/main/midi-to-command/audioconfig03.sh) Clicks
+- [1](https://github.com/RowdyVoyeur/midi-tools/blob/main/midi-to-command/audioconfig03.sh) Click
 
 ### M8 Headless Settings
 - Firmware [6.2.1](https://github.com/Dirtywave/M8HeadlessFirmware/blob/main/Releases/M8_V6_2_1_HEADLESS.hex)
@@ -24,12 +24,10 @@ A portable device to add an Audio Input to the Roland MC-101, using Raspberry Pi
 - RX SartStop: ON
 - RX Start USB: ON
 - Ctrl Ch: 13
-
-### Roland MC-101 Tempo Settings
-- MstrStepLen: 16 steps (same as on M8)
-- RS Start USB: ON
-- Ctrl Ch: CH14
 - Ctrl Tx OUT: ON
 - Ctrl Tx USB: ON
 - Ctrl Rx: ON
 - Rx Scatter: ON
+
+### Roland MC-101 Tempo Settings
+- MstrStepLen: 16 steps (same as on M8)
