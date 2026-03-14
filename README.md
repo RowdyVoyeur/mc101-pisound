@@ -43,3 +43,4 @@ sudo apt install -y build-essential cmake git pkg-config libasound2-dev libseria
 
 ### Roland MC-101 Tempo Settings
 - MstrStepLen: 16 steps (same as on M8)
+
