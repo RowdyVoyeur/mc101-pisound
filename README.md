@@ -1,4 +1,16 @@
-# pisound-mc101
+# mc101-pisound
+
+M8C is a client for [Dirtywave M8](https://dirtywave.com/) headless mode. While the original [application](https://github.com/laamaa/m8c) is cross-platform and can be built for Linux, Windows, macOS, and Android, **this specific fork is optimized and tested exclusively for the Raspberry Pi 4** (running 64-bit Raspberry Pi OS Bookworm) and is tailored for integration with the Roland MC-101 and PiSound.
+
+## Prepare to Install
+
+First, update your system and install the required tools and dependencies (including CMake, ALSA, Serial Port, and RtMidi libraries):
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake git pkg-config libasound2-dev libserialport-dev librtmidi-dev
+
+# Notes
 A portable device to add an Audio Input to the Roland MC-101, using Raspberry Pi 4 and Blokas Pisound.
 
 ## Settings

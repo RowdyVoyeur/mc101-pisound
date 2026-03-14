@@ -1,0 +1,58 @@
+name: Raspberry Pi 4 Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  # Prevents deprecation warnings in the Actions log
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-arm64:
+    name: Build for RPi OS (Bookworm 64-bit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build in ARM64 Container
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          distro: bookworm
+          install: |
+            # 1. Update and install dependencies (added cmake and librtmidi-dev)
+            apt-get update
+            apt-get install -y build-essential cmake git pkg-config libasound2-dev libserialport-dev librtmidi-dev
+            
+            # 2. SDL3 is too new for Bookworm's apt repository, so we compile it from source
+            echo "Downloading and building SDL3..."
+            git clone --depth 1 https://github.com/libsdl-org/SDL.git sdl3
+            cd sdl3
+            mkdir build && cd build
+            cmake -DCMAKE_BUILD_TYPE=Release ..
+            make -j4
+            make install
+            ldconfig
+            cd ../..
+            
+          run: |
+            # 3. Ensure the compiler can find the newly installed SDL3 libraries
+            export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+            export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+            
+            # 4. Build the binary
+            make clean
+            make
+            
+            # Note: If you prefer the GitHub Action to compile the MIDI-enabled 
+            # version by default, change "make" above to "make rtmidi"
+
+      - name: Upload Compiled Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mc101-pisound-binary
+          path: m8c
