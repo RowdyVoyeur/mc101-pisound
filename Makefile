@@ -23,7 +23,7 @@ INCLUDES = $(shell pkg-config --libs sdl3 libserialport)
 local_CFLAGS = $(CFLAGS) $(shell pkg-config --cflags sdl3 libserialport) \
                -Wall -Wextra -O3 -pipe -I. \
                -march=armv8-a+crc -mtune=cortex-a72 \
-               -fomit-frame-pointer -flto -DNDEBUG
+               -fomit-frame-pointer -flto -DNDEBUG -DUSE_SERIALPORT
 
 # Linker flags for Link-Time Optimization and stripping binaries to reduce size
 LDFLAGS = -flto -Wl,-O1 -Wl,--as-needed -s
@@ -48,7 +48,7 @@ rtmidi: m8c
 .PHONY: clean
 
 clean:
-	rm -f src/*.o src/backends/*.o *~ m8c
+	rm -f $(OBJ) *~ m8c
 
 # PREFIX is environment variable, but if it is not set, then set default value
 ifeq ($(PREFIX),)
