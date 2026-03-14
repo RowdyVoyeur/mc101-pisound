@@ -11,6 +11,7 @@ First, update your system and install the required tools and dependencies (inclu
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake git pkg-config libasound2-dev libserialport-dev librtmidi-dev
+```
 
 ## Settings
 
