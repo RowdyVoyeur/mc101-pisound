@@ -24,10 +24,13 @@ jobs:
           arch: aarch64
           distro: bookworm
           install: |
-            # 1. Update and install dependencies (added cmake and librtmidi-dev)
+            # 1. Update and install core dependencies and graphics/USB libraries for SDL3
             apt-get update
-            apt-get install -y build-essential cmake git pkg-config libasound2-dev libserialport-dev librtmidi-dev
-            
+            apt-get install -y build-essential cmake git pkg-config \
+              libasound2-dev libserialport-dev librtmidi-dev \
+              libwayland-dev wayland-protocols libxkbcommon-dev \
+              libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev libudev-dev
+
             # 2. SDL3 is too new for Bookworm's apt repository, so we compile it from source
             echo "Downloading and building SDL3..."
             git clone --depth 1 https://github.com/libsdl-org/SDL.git sdl3
