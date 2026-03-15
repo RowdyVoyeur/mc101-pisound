@@ -1,56 +1,44 @@
-#Set the compiler you are using
+# Set the compiler
 CC ?= gcc
-
-#Set the filename extension of your C files
-EXTENSION = .c
 
 # Location of the source files
 SOURCE_DIR = src/
+EXTENSION = .c
 
-# Find all source files in the src directory and subdirectories
+# Find all source files and headers
 SRC_FILES := $(shell find $(SOURCE_DIR) -type f -name "*$(EXTENSION)")
-
-# Convert to object files
 OBJ := $(SRC_FILES:.c=.o)
-
-# Find all header files for dependencies
 DEPS := $(shell find src -type f -name "*.h")
 
-# Libraries for the project (Removed Windows-specific hacks)
-INCLUDES = $(shell pkg-config --libs sdl3 libserialport)
+# Libraries: Using libusb-1.0 for Teensy/M8 and rtmidi for controllers
+INCLUDES = $(shell pkg-config --libs sdl3 libusb-1.0 rtmidi)
 
-# Compiler flags optimized for Raspberry Pi 4 (Cortex-A72, 64-bit)
-local_CFLAGS = $(CFLAGS) $(shell pkg-config --cflags sdl3 libserialport) \
+# Compiler flags: Optimized for Pi 4
+# -DUSE_LIBUSB activates the Teensy USB code
+# -DUSE_RTMIDI activates the MIDI controller code
+local_CFLAGS = $(CFLAGS) $(shell pkg-config --cflags sdl3 libusb-1.0 rtmidi) \
                -Wall -Wextra -O3 -pipe -I. \
                -march=armv8-a+crc -mtune=cortex-a72 \
-               -fomit-frame-pointer -flto -DNDEBUG -DUSE_SERIALPORT
+               -fomit-frame-pointer -flto -DNDEBUG \
+               -DUSE_LIBUSB -DUSE_RTMIDI
 
-# Linker flags for Link-Time Optimization and stripping binaries to reduce size
+# Linker flags
 LDFLAGS = -flto -Wl,-O1 -Wl,--as-needed -s
 
-#define a rule that applies to all files ending in the .o suffix. Compile each object file
+# Rule for object files
 %.o: %$(EXTENSION) $(DEPS)
 	$(CC) -c -o $@ $< $(local_CFLAGS)
 
-#Combine them into the output file
+# Rule for final binary
 m8c: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(local_CFLAGS) $(INCLUDES)
 
-# rtmidi target: Optimized for Pi 4 (Kept for MC-101 / PiSound MIDI integration)
-rtmidi: INCLUDES = $(shell pkg-config --libs sdl3 rtmidi)
-rtmidi: local_CFLAGS = $(CFLAGS) $(shell pkg-config --cflags sdl3 rtmidi) \
-                       -Wall -Wextra -O3 -pipe -I. \
-                       -march=armv8-a+crc -mtune=cortex-a72 \
-                       -fomit-frame-pointer -flto -DUSE_RTMIDI -DNDEBUG
-rtmidi: m8c
-
-#Cleanup
+# Cleanup
 .PHONY: clean
-
 clean:
 	rm -f $(OBJ) *~ m8c
 
-# PREFIX is environment variable, but if it is not set, then set default value
+# Install
 ifeq ($(PREFIX),)
     PREFIX := /usr/local
 endif
