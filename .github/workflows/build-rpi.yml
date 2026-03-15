@@ -26,7 +26,7 @@ jobs:
           install: |
             apt-get update
             apt-get install -y build-essential cmake git pkg-config \
-              libasound2-dev libusb-1.0-0-dev librtmidi-dev \
+              libasound2-dev libusb-1.0-0-dev \
               libwayland-dev wayland-protocols libxkbcommon-dev \
               libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev libudev-dev
 

@@ -10,17 +10,16 @@ SRC_FILES := $(shell find $(SOURCE_DIR) -type f -name "*$(EXTENSION)")
 OBJ := $(SRC_FILES:.c=.o)
 DEPS := $(shell find src -type f -name "*.h")
 
-# Libraries: Using libusb-1.0 for Teensy/M8 and rtmidi for controllers
-INCLUDES = $(shell pkg-config --libs sdl3 libusb-1.0 rtmidi)
+# Libraries: Using libusb-1.0 for the Teensy 4.1 connection
+# (We use SDL3 to handle the audio and gamepads/controllers)
+INCLUDES = $(shell pkg-config --libs sdl3 libusb-1.0)
 
 # Compiler flags: Optimized for Pi 4
-# -DUSE_LIBUSB activates the Teensy USB code
-# -DUSE_RTMIDI activates the MIDI controller code
-local_CFLAGS = $(CFLAGS) $(shell pkg-config --cflags sdl3 libusb-1.0 rtmidi) \
+# -DUSE_LIBUSB activates the high-speed USB backend for the Teensy
+local_CFLAGS = $(CFLAGS) $(shell pkg-config --cflags sdl3 libusb-1.0) \
                -Wall -Wextra -O3 -pipe -I. \
                -march=armv8-a+crc -mtune=cortex-a72 \
-               -fomit-frame-pointer -flto -DNDEBUG \
-               -DUSE_LIBUSB -DUSE_RTMIDI
+               -fomit-frame-pointer -flto -DNDEBUG -DUSE_LIBUSB
 
 # Linker flags
 LDFLAGS = -flto -Wl,-O1 -Wl,--as-needed -s
