@@ -56,10 +56,10 @@ jack_connect system:capture_1 M8_out:playback_1
 jack_connect system:capture_2 M8_out:playback_2
 
 # Start Program Change to Note
-sudo python3 /home/patch/midi-tools/pc-to-note/main.py &
+# sudo python3 /home/patch/midi-tools/pc-to-note/main.py &
 
 # Start M8C
-pushd /home/patch/m8c-rpi4
+pushd /home/patch/mc101-pisound
 ./m8c
 popd
 
@@ -67,5 +67,5 @@ popd
 killall -s SIGINT alsa_out alsa_in
 
 # Shutdown after quitting M8C
-sleep 2
-sudo shutdown now
+# sleep 2
+# sudo shutdown now

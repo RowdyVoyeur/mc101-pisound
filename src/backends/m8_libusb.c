@@ -24,6 +24,8 @@ static int ep_in_addr = 0x83;
 #define M8_PID_STEREO 0x048a
 #define M8_PID_MULTICHANNEL 0x048b
 
+#define M8_TIMEOUT 1000
+
 #define SERIAL_READ_SIZE 1024  // maximum amount of bytes to read from the serial in one pass
 
 libusb_context *ctx = NULL;
@@ -228,7 +230,7 @@ int async_read_start(uint8_t *serial_buf, int count, slip_handler_s *slip) {
   }
   
   libusb_fill_bulk_stream_transfer(async_transfer, devh, ep_in_addr, 0, serial_buf, count, 
-                                   &async_callback, slip, 300);
+                                   &async_callback, slip, M8_TIMEOUT);
   int r = libusb_submit_transfer(async_transfer);
   
   if (r < 0) {
@@ -470,7 +472,7 @@ int m8_reset_display() {
 
   char buf[1] = {'R'};
 
-  result = blocking_write(buf, 1, 5);
+  result = blocking_write(buf, 1, M8_TIMEOUT);
   if (result != 1) {
     SDL_LogError(SDL_LOG_CATEGORY_SYSTEM, "Error resetting M8 display, code %d", result);
     return 0;
@@ -489,7 +491,7 @@ int m8_enable_display(const unsigned char reset_display) {
   SDL_Log("Enabling and resetting M8 display\n");
 
   char buf[1] = {'E'};
-  result = blocking_write(buf, 1, 5);
+  result = blocking_write(buf, 1, M8_TIMEOUT);
   if (result != 1) {
     SDL_LogError(SDL_LOG_CATEGORY_SYSTEM, "Error enabling M8 display, code %d", result);
     return 0;
@@ -510,7 +512,7 @@ int m8_close() {
   // Stop async transfer first
   async_read_stop();
 
-  result = blocking_write(buf, 1, 5);
+  result = blocking_write(buf, 1, M8_TIMEOUT);
   if (result != 1) {
     SDL_LogError(SDL_LOG_CATEGORY_SYSTEM, "Error sending disconnect, code %d", result);
     return -1;
@@ -553,7 +555,7 @@ int m8_send_msg_controller(uint8_t input) {
   char buf[2] = {'C', input};
   int nbytes = 2;
   int result;
-  result = blocking_write(buf, nbytes, 5);
+  result = blocking_write(buf, nbytes, M8_TIMEOUT);
   if (result != nbytes) {
     SDL_LogError(SDL_LOG_CATEGORY_SYSTEM, "Error sending input, code %d", result);
     return -1;
@@ -567,7 +569,7 @@ int m8_send_msg_keyjazz(uint8_t note, uint8_t velocity) {
   char buf[3] = {'K', note, velocity};
   int nbytes = 3;
   int result;
-  result = blocking_write(buf, nbytes, 5);
+  result = blocking_write(buf, nbytes, M8_TIMEOUT);
   if (result != nbytes) {
     SDL_LogError(SDL_LOG_CATEGORY_SYSTEM, "Error sending keyjazz, code %d", result);
     return -1;
