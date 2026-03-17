@@ -41,6 +41,9 @@ static void do_wait_for_device(struct app_context *ctx) {
     ticks_poll_device = SDL_GetTicks();
     if (m8_initialize(0, ctx->preferred_device)) {
 
+      SDL_Log("Device found, settling USB...");
+      SDL_Delay(500); // Wait for Linux USB bus to settle
+
       if (ctx->conf.audio_enabled) {
         if (!audio_initialize(ctx->conf.audio_device_name, ctx->conf.audio_buffer_size)) {
           SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Cannot initialize audio");
@@ -53,10 +56,10 @@ static void do_wait_for_device(struct app_context *ctx) {
       if (m8_enabled == 1) {
         ctx->app_state = RUN;
         ctx->device_connected = 1;
-        SDL_Delay(100); // Give the display time to initialize
+        SDL_Delay(100); 
         screensaver_destroy();
         screensaver_initialized = 0;
-        m8_reset_display(); // Avoid display glitches.
+        // The reset is now handled in the main iterate loop for better reliability
       } else {
         SDL_LogCritical(SDL_LOG_CATEGORY_ERROR, "Device not detected.");
         ctx->app_state = QUIT;
@@ -122,10 +125,22 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     if (ctx->app_suspended) {
       return SDL_APP_CONTINUE;
     }
+
+    // --- FIX: Force full M8 refresh on the first frame of the main loop ---
+    static int initial_reset_done = 0;
+    if (!initial_reset_done) {
+        SDL_Log("Main loop active. Forcing initial M8 display reset...");
+        SDL_Delay(200);      // Tiny extra wait to ensure window is hot
+        m8_reset_display();  // Command M8 to send a full frame
+        initial_reset_done = 1;
+    }
+    // ----------------------------------------------------------------------
+
     const int result = m8_process_data(&ctx->conf);
     if (result == DEVICE_DISCONNECTED) {
       ctx->device_connected = 0;
       ctx->app_state = WAIT_FOR_DEVICE;
+      initial_reset_done = 0; // Reset flag for next reconnection
       audio_close();
     } else if (result == DEVICE_FATAL_ERROR) {
       return SDL_APP_FAILURE;
@@ -160,8 +175,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
   SDL_SetLogPriorities(SDL_LOG_PRIORITY_INFO);
 #endif
 
-  // Process the application's main callback roughly at 120 Hz
-  SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "120");
+  // FIX: Process callback at 60 Hz to match M8 hardware and reduce USB stress
+  SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "60");
 
   struct app_context *ctx = SDL_calloc(1, sizeof(struct app_context));
   if (ctx == NULL) {
@@ -181,6 +196,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
   ctx->device_connected =
       m8_initialize(1, ctx->preferred_device);
 
+  // FIX: Settle USB bus after initialization
+  if (ctx->device_connected) {
+    SDL_Log("M8 detected on launch. Settling USB bus...");
+    SDL_Delay(500); 
+  }
+
   if (gamepads_initialize() < 0) {
     SDL_LogCritical(SDL_LOG_CATEGORY_ERROR, "Failed to initialize game controllers.");
     return SDL_APP_FAILURE;
@@ -191,6 +212,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
       audio_initialize(ctx->conf.audio_device_name, ctx->conf.audio_buffer_size);
     }
     ctx->app_state = RUN;
+    // Initial m8_reset_display() is now handled in SDL_AppIterate for better timing
     render_screen(&ctx->conf);
   } else {
     SDL_LogCritical(SDL_LOG_CATEGORY_ERROR, "Device not detected.");
