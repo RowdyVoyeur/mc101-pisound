@@ -1,0 +1,13 @@
+# Build artifacts
+*.o
+m8c
+sdl3/
+build/
+
+# Temp files
+*~
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
