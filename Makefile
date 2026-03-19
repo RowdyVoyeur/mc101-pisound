@@ -11,8 +11,8 @@ OBJ := $(SRC_FILES:.c=.o)
 DEPS := $(shell find src -type f -name "*.h")
 
 # Libraries: Using libusb-1.0 for the Teensy 4.1 connection
-# (We use SDL3 to handle the audio and gamepads/controllers)
-INCLUDES = $(shell pkg-config --libs sdl3 libusb-1.0)
+# Added -lSDL3_ttf to support the Python HUD Overlay
+INCLUDES = $(shell pkg-config --libs sdl3 libusb-1.0) -lSDL3_ttf
 
 # Compiler flags: Optimized for Pi 4
 # -DUSE_LIBUSB activates the high-speed USB backend for the Teensy

@@ -21,6 +21,101 @@
 #include "render.h"
 #include "log_overlay.h"
 
+// --- Start of overlay ---
+
+#include <SDL3_ttf/SDL_ttf.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <string.h>
+
+#define OVERLAY_PIPE "/tmp/m8c_overlay"
+#define OVERLAY_DURATION 5000 // 5 seconds in milliseconds
+
+typedef struct {
+    char lines[3][128];
+    uint64_t hide_at;
+    TTF_Font *font;
+    bool active;
+    int pipe_fd;
+} OverlayHUD;
+
+OverlayHUD hud = {0};
+
+void update_overlay_data() {
+    char buffer[512];
+    // Non-blocking read from the pipe
+    ssize_t bytes = read(hud.pipe_fd, buffer, sizeof(buffer) - 1);
+    
+    if (bytes > 0) {
+        buffer[bytes] = '\0';
+        
+        // 1. Wipe old lines before writing new ones
+        for (int j = 0; j < 3; j++) {
+            hud.lines[j][0] = '\0';
+        }
+
+        // 2. Parse the data using the tilde (~) as the line breaker
+        char *token = strtok(buffer, "~");
+        int i = 0;
+        while (token != NULL && i < 3) {
+            // Strip any invisible newlines sent by the terminal
+            token[strcspn(token, "\r\n")] = 0; 
+            strncpy(hud.lines[i], token, 127);
+            token = strtok(NULL, "~");
+            i++;
+        }
+        
+        // 3. Force the screen to update instantly to show the new HUD
+        if (!hud.active) {
+            m8_reset_display(); 
+        }
+        
+        hud.hide_at = SDL_GetTicks() + OVERLAY_DURATION;
+        hud.active = true;
+    }
+}
+
+void draw_overlay(SDL_Renderer *renderer) {
+    // Check if the 5 seconds are up
+    if (hud.active && SDL_GetTicks() > hud.hide_at) {
+        hud.active = false;
+        // Force the M8 to redraw the screen, wiping the old HUD away
+        m8_reset_display(); 
+        return;
+    }
+
+    if (!hud.active) {
+        return;
+    }
+
+    // 1. Draw Background Box (Black) 
+    // Height set to exactly 48.0f to cover the 3 waveform rows
+    SDL_FRect bg = {0.0f, 0.0f, 320.0f, 48.0f}; 
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderFillRect(renderer, &bg);
+
+    // 2. Draw 3 Lines of Text (White)
+    SDL_Color white = {255, 255, 255, 255};
+    for (int i = 0; i < 3; i++) {
+        if (strlen(hud.lines[i]) > 0) {
+            SDL_Surface *surf = TTF_RenderText_Blended(hud.font, hud.lines[i], 0, white);
+            if (surf) {
+                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                float tw = (float)surf->w;
+                float th = (float)surf->h;
+                // Start at y=4, add 16px per line for perfect double-spacing
+                SDL_FRect dst = {4.0f, 4.0f + (i * 16.0f), tw, th};
+                SDL_RenderTexture(renderer, tex, NULL, &dst);
+                SDL_DestroySurface(surf);
+                SDL_DestroyTexture(tex);
+            }
+        }
+    }
+}
+
+// --- End of overlay ---
+
 static void do_wait_for_device(struct app_context *ctx) {
   static Uint64 ticks_poll_device = 0;
   static int screensaver_initialized = 0;
@@ -112,6 +207,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   struct app_context *ctx = appstate;
   SDL_AppResult app_result = SDL_APP_CONTINUE;
 
+  // Poll for overlay text data from Python every frame
+  update_overlay_data();
+
   switch (ctx->app_state) {
   case INITIALIZE:
     break;
@@ -145,7 +243,21 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     } else if (result == DEVICE_FATAL_ERROR) {
       return SDL_APP_FAILURE;
     }
+    
     render_screen(&ctx->conf);
+
+    // Overlay is drawn AFTER render_screen so it sits on top of the M8 interface
+    // Intercept the active window and renderer directly from SDL3
+    int num_windows = 0;
+    SDL_Window **windows = SDL_GetWindows(&num_windows);
+    if (windows && num_windows > 0) {
+        SDL_Renderer *active_renderer = SDL_GetRenderer(windows[0]);
+        if (active_renderer) {
+            draw_overlay(active_renderer);
+        }
+        SDL_free(windows); // SDL3 requires us to free the window list
+    }
+
     break;
   }
 
@@ -220,6 +332,20 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     ctx->app_state = WAIT_FOR_DEVICE;
   }
 
+  // --- HUD INITIALIZATION ---
+  TTF_Init();
+  // Changed font size to 8 to match native M8 text scale
+  hud.font = TTF_OpenFont("assets/stealth57.ttf", 8); 
+  if (!hud.font) {
+      SDL_Log("HUD: Could not load font from assets/stealth57.ttf: %s", SDL_GetError());
+  }
+
+  // Create and open the Pipe (FIFO) for Python
+  mkfifo(OVERLAY_PIPE, 0666);
+  // O_RDWR prevents the pipe from aggressively spinning when Python closes its end
+  hud.pipe_fd = open(OVERLAY_PIPE, O_RDWR | O_NONBLOCK);
+  // --------------------------
+
   return SDL_APP_CONTINUE;
 }
 
@@ -242,6 +368,13 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
       m8_close();
     }
     SDL_free(app);
+
+    // --- HUD CLEANUP ---
+    if (hud.font) TTF_CloseFont(hud.font);
+    if (hud.pipe_fd > 0) close(hud.pipe_fd);
+    TTF_Quit();
+    unlink(OVERLAY_PIPE); 
+    // -------------------
 
     SDL_Log("Shutting down.");
     SDL_Quit();
