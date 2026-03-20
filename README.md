@@ -16,40 +16,6 @@ sudo apt install -y \
   libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
   libgbm-dev libudev-dev libdbus-1-dev \
   libusb-1.0-0-dev librtmidi-dev gh
-  libsdl3-ttf-dev
-```
-Install the Font Engines
-SDL3_ttf relies on FreeType to actually read the .ttf files. Run this to ensure your Pi has those foundational tools:
-
-```
-sudo apt update
-sudo apt install -y cmake libfreetype-dev libharfbuzz-dev
-```
-
-Build SDL3_ttf from Source
-Run these commands one by one to clone the extension, build it, and install it into your system's library folder.
-
-```
-# 1. Go back to your home folder
-cd ~
-
-# 2. Download the SDL3_ttf source code
-git clone https://github.com/libsdl-org/SDL_ttf.git
-
-# 3. Move into the folder and prepare the build
-cd SDL_ttf
-mkdir build
-cd build
-
-# 4. Configure and compile (using all 4 cores of the Pi)
-cmake ..
-make -j4
-
-# 5. Install it to the system
-sudo make install
-
-# 6. Refresh the system's library cache
-sudo ldconfig
 ```
 
 
