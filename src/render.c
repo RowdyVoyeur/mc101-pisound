@@ -35,18 +35,17 @@ typedef struct {
 
 static OverlayHUD hud = {0};
 
-// Our dedicated Virtual Canvas for the overlay to guarantee perfect scaling
 static SDL_Texture *overlay_texture = NULL; 
 
-// We will store the dynamically sniffed theme color here 
-static SDL_Color global_foreground_color = {0x00, 0x92, 0xBC, 255}; 
+// Storage for our sniffed theme colors
+static SDL_Color global_foreground_color = {0xFF, 0xFF, 0xFF, 255}; 
+static SDL_Color global_background_color = {0x00, 0x00, 0x00, 255};
 // --- End of Overlay Globals ---
 
 static SDL_Window *win;
 static SDL_Renderer *rend;
 static SDL_Texture *main_texture;
 static SDL_Texture *hd_texture = NULL;
-static SDL_Color global_background_color = (SDL_Color){.r = 0x00, .g = 0x00, .b = 0x00, .a = 0x00};
 static SDL_RendererLogicalPresentation window_scaling_mode = SDL_LOGICAL_PRESENTATION_INTEGER_SCALE;
 static SDL_ScaleMode texture_scaling_mode = SDL_SCALEMODE_NEAREST;
 
@@ -107,35 +106,32 @@ static void draw_overlay(SDL_Renderer *renderer) {
 
     if (!hud.active || !overlay_texture) return;
 
-    // Save the current target so we don't break the M8's rendering flow
     SDL_Texture *old_target = SDL_GetRenderTarget(renderer);
-
-    // 1. Switch our paintbrush to the 320x240 Virtual Canvas
     SDL_SetRenderTarget(renderer, overlay_texture);
 
-    // Wipe the canvas completely transparent
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderClear(renderer);
 
-    // Draw the Background Box (Width stretches across the screen, 48px height)
+    // Box height fits all lines
     SDL_FRect bg = {0.0f, 0.0f, (float)texture_width, 48.0f}; 
     SDL_SetRenderDrawColor(renderer, global_background_color.r, global_background_color.g, global_background_color.b, 255);
     SDL_RenderFillRect(renderer, &bg);
 
-    uint32_t bg_hex = (global_background_color.r << 16) | (global_background_color.g << 8) | global_background_color.b;
-    uint32_t fg_hex = (global_foreground_color.r << 16) | (global_foreground_color.g << 8) | global_foreground_color.b;
+    // Forces Alpha to 0xFF to prevent darker colors during texture blending
+    uint32_t bg_hex = 0xFF000000 | (global_background_color.r << 16) | (global_background_color.g << 8) | global_background_color.b;
+    uint32_t fg_hex = 0xFF000000 | (global_foreground_color.r << 16) | (global_foreground_color.g << 8) | global_foreground_color.b;
 
-    // Draw Text with clean, breathable 12-pixel line spacing
-    for (int i = 0; i < 3; i++) {
-        if (strlen(hud.lines[i]) > 0) {
-            inprint(renderer, hud.lines[i], 4, 4 + (i * 12), fg_hex, bg_hex);
-        }
+    if (strlen(hud.lines[0]) > 0) {
+        inprint(renderer, hud.lines[0], 8, 4, fg_hex, bg_hex);
+    }
+    if (strlen(hud.lines[1]) > 0) {
+        inprint(renderer, hud.lines[1], 8, 22, fg_hex, bg_hex);
+    }
+    if (strlen(hud.lines[2]) > 0) {
+        inprint(renderer, hud.lines[2], 8, 36, fg_hex, bg_hex);
     }
 
-    // 2. Switch the paintbrush back to the main monitor output
     SDL_SetRenderTarget(renderer, old_target);
-
-    // 3. Stretch and stamp our Virtual Canvas onto the screen
     SDL_RenderTexture(renderer, overlay_texture, NULL, NULL);
 }
 // --- End of Overlay Functions ---
@@ -236,7 +232,6 @@ static void check_and_adjust_window_and_texture_size(const int new_width, const 
 
   if (main_texture != NULL) SDL_DestroyTexture(main_texture);
   
-  // Update Overlay Texture size to exactly match the M8's physical resolution
   if (overlay_texture != NULL) SDL_DestroyTexture(overlay_texture);
   overlay_texture = SDL_CreateTexture(rend, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, texture_width, texture_height);
   SDL_SetTextureBlendMode(overlay_texture, SDL_BLENDMODE_BLEND);
@@ -285,10 +280,8 @@ void renderer_close(void) {
   SDL_DestroyRenderer(rend);
   SDL_DestroyWindow(win);
 
-  // --- Overlay Cleanup ---
   if (hud.pipe_fd > 0) close(hud.pipe_fd);
   unlink(OVERLAY_PIPE); 
-  // -----------------------
 }
 
 int toggle_fullscreen(config_params_s *conf) {
@@ -309,15 +302,22 @@ int draw_character(struct draw_character_command *command) {
   const uint32_t bgcolor =
       command->background.r << 16 | command->background.g << 8 | command->background.b;
 
-  // --- The Bulletproof "Tempo T" Sniffer ---
-  // Looks for the 'T' character in the entire top-right block of the screen.
-  // This catches the theme color whether the UI shifts it to Y=16, 24, or 32!
-  if (command->c == 'T' && command->pos.x >= texture_width - 64 && command->pos.y >= 8 && command->pos.y <= 32) {
-      global_foreground_color.r = command->foreground.r;
-      global_foreground_color.g = command->foreground.g;
-      global_foreground_color.b = command->foreground.b;
+  // --- Normalizing Color Picker ---
+  if (command->pos.x == 272 && command->pos.y == 40) {
+      // We grab the color, but boost it to 100% luminosity to counteract M8's internal dimming
+      float r = command->foreground.r;
+      float g = command->foreground.g;
+      float b = command->foreground.b;
+      float max_val = SDL_max(r, SDL_max(g, b));
+      
+      if (max_val > 0) {
+          float multiplier = 255.0f / max_val;
+          global_foreground_color.r = (uint8_t)(r * multiplier);
+          global_foreground_color.g = (uint8_t)(g * multiplier);
+          global_foreground_color.b = (uint8_t)(b * multiplier);
+      }
   }
-  // -----------------------------------------
+  // --------------------------------
 
   inprint(rend, (char *)&command->c, command->pos.x,
           command->pos.y + text_offset_y + screen_offset_y, fgcolor, bgcolor);
@@ -337,10 +337,10 @@ void draw_rectangle(struct draw_rectangle_command *command) {
     global_background_color.r = command->color.r;
     global_background_color.g = command->color.g;
     global_background_color.b = command->color.b;
-    global_background_color.a = 0xFF;
+    global_background_color.a = 255;
   }
 
-  SDL_SetRenderDrawColor(rend, command->color.r, command->color.g, command->color.b, 0xFF);
+  SDL_SetRenderDrawColor(rend, command->color.r, command->color.g, command->color.b, 255);
   SDL_RenderFillRect(rend, &render_rect);
   dirty = 1;
 }
@@ -365,7 +365,7 @@ void draw_waveform(struct draw_oscilloscope_waveform_command *command) {
     prev_waveform_size = command->waveform_size;
 
     SDL_SetRenderDrawColor(rend, global_background_color.r, global_background_color.g,
-                           global_background_color.b, global_background_color.a);
+                           global_background_color.b, 255);
     SDL_RenderFillRect(rend, &wf_rect);
 
     SDL_SetRenderDrawColor(rend, command->color.r, command->color.g, command->color.b, 255);
@@ -439,7 +439,7 @@ int renderer_initialize(config_params_s *conf) {
   SDL_SetTextureScaleMode(main_texture, texture_scaling_mode);
   SDL_SetRenderTarget(rend, main_texture);
   SDL_SetRenderDrawColor(rend, global_background_color.r, global_background_color.g,
-                         global_background_color.b, global_background_color.a);
+                         global_background_color.b, 255);
   SDL_RenderClear(rend);
 
   renderer_set_font_mode(0);
@@ -468,7 +468,7 @@ void render_screen(config_params_s *conf) {
   dirty = 0;
   SDL_SetRenderTarget(rend, NULL);
   SDL_SetRenderDrawColor(rend, global_background_color.r, global_background_color.g,
-                              global_background_color.b, global_background_color.a);
+                              global_background_color.b, 255);
   SDL_RenderClear(rend);
 
   if (conf->integer_scaling) {
@@ -476,20 +476,18 @@ void render_screen(config_params_s *conf) {
     log_overlay_render(rend, texture_width, texture_height, texture_scaling_mode, font_mode);
     if (settings_is_open()) settings_render_overlay(rend, conf, texture_width, texture_height);
     
-    // Drawn perfectly scaled on top!
     draw_overlay(rend); 
 
   } else {
     if (hd_texture == NULL) create_hd_texture();
     SDL_SetRenderTarget(rend, hd_texture);
     SDL_SetRenderDrawColor(rend, global_background_color.r, global_background_color.g,
-                           global_background_color.b, global_background_color.a);
+                           global_background_color.b, 255);
     SDL_RenderClear(rend);
     SDL_RenderTexture(rend, main_texture, NULL, NULL);
     log_overlay_render(rend, texture_width, texture_height, texture_scaling_mode, font_mode);
     if (settings_is_open()) settings_render_overlay(rend, conf, texture_width, texture_height);
 
-    // Drawn perfectly scaled on top!
     draw_overlay(rend);
 
     SDL_SetRenderTarget(rend, NULL);
@@ -544,7 +542,7 @@ void show_error_message(const char *message) {
 
 void renderer_clear_screen(void) {
   SDL_SetRenderDrawColor(rend, global_background_color.r, global_background_color.g,
-                         global_background_color.b, global_background_color.a);
+                         global_background_color.b, 255);
   SDL_SetRenderTarget(rend, main_texture);
   SDL_RenderClear(rend);
   SDL_SetRenderTarget(rend, NULL);
