@@ -12,12 +12,10 @@ Install the libraries required by SLD3 and m8c:
 sudo apt update
 sudo apt install -y \
   build-essential cmake git pkg-config \
-  libwayland-dev wayland-protocols libxkbcommon-dev \
-  libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
-  libgbm-dev libudev-dev libdbus-1-dev \
-  libusb-1.0-0-dev librtmidi-dev gh
+  libusb-1.0-0-dev \
+  libudev-dev libdbus-1-dev \
+  libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev
 ```
-
 
 ## 2. Download SDL3
 
@@ -38,8 +36,8 @@ This command tells SDL3 to use the hardware acceleration of the Pi 4 and the low
 ```
 cmake -DCMAKE_BUILD_TYPE=Release \
       -DSDL_VIDEO_DRIVER_KMSDRM=ON \
-      -DSDL_VIDEO_DRIVER_X11=ON \
-      -DSDL_VIDEO_DRIVER_WAYLAND=ON \
+      -DSDL_VIDEO_DRIVER_X11=OFF \
+      -DSDL_VIDEO_DRIVER_WAYLAND=OFF \
       -DSDL_OPENGL=OFF \
       -DSDL_OPENGLES=ON \
       -DSDL_ALSA=ON \
@@ -111,10 +109,10 @@ lsusb
 ```
 If you see something like "Van Ooijen Technische Informatica M8", it should be working fine.
 
-## 9. Run as Root
+## 9. Run the application
 
 ```
-sudo ./m8c
+./m8c
 ```
 
 ## Settings

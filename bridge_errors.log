@@ -1,0 +1,6 @@
+Unable to set hw params for playback: Invalid argument
+Setting of hwparams failed: Invalid argument
+selected sample format: float
+delay = -65
+selected sample format: 16bit
+delay = 6391
