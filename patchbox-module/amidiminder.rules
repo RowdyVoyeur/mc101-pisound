@@ -1,0 +1,14 @@
+# Rules Format (ports can be specified by name or by number):
+
+# A --> B | Connects device A to device B
+# A <-- B | Connects device B to device A
+# A <--> B | Connects devices A and B both ways
+# A <-x-> B | Does not allow conections between device A and device B
+
+# Customized Rules:
+
+pisound <--> M8
+M8 <--> MC-101
+nanoKONTROL --> M8
+nanoKONTROL --> MC-101
+.hw <—x-> .app

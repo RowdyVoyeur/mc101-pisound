@@ -96,41 +96,23 @@ make clean
 make
 ```
 
-## 9. Install udev Rules
+## 9. Install the Patchbox Module
 
-By default, Linux blocks regular users from talking directly to USB hardware for security. You need to tell the Pi that the system is allowed to talk to the M8 without requiring root privileges.
+To run everything automatically and manage the audio/MIDI routing, install the custom Patchbox module included in this repository.
 
-### Create a new rules file:
+This installation script will automatically configure the required USB udev rules for the M8, so you do not need to set them manually.
 
-Copy and paste this entire line into the terminal and press Enter. This creates the configuration file and writes the correct permissions:
-
-```
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="16c0", ATTR{idProduct}=="048a", MODE="0666", GROUP="plugdev"' | sudo tee /etc/udev/rules.d/50-m8.rules > /dev/null
-```
-
-### Reload the rules
-
-Tell the system to read the new permissions you just added:
+Run the following command to install the module:
 
 ```
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+patchbox module install /home/patch/mc101-pisound/patchbox-module
 ```
 
-### Apply and verify
-
-Instead of rebooting the entire system, you can just physically reset the connection.
-
-Unplug the M8 USB cable from the Raspberry Pi.
-
-Plug it back in (this forces the Pi to apply the new rules to the device).
-
-Run the following command to check if the system sees it:
+Once installed, activate the module:
 
 ```
-lsusb
+patchbox module activate mc101-pisound
 ```
-If you see something like "Van Ooijen Technische Informatica M8", it should be working fine.
 
 ## 10. Run the application
 

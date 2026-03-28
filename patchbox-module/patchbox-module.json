@@ -1,0 +1,21 @@
+{
+  "name": "mc101-pisound",
+  "version": "1.0.0",
+  "description": "Auto start M8C with MC-101 and Pisound routing",
+  "author": "RowdyVoyeur",
+  "launch_mode": "auto",
+  "depends_on": [
+    "jack.service",
+    {
+      "service": "amidiminder.service",
+      "config": "amidiminder.rules"
+    }
+  ],
+  "services": [
+  ],
+  "scripts": {
+    "install": "install.sh",
+    "launch": "launch.sh",
+    "stop": "stop.sh"
+  }
+}
