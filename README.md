@@ -14,7 +14,8 @@ sudo apt install -y \
   build-essential cmake git pkg-config \
   libusb-1.0-0-dev \
   libudev-dev libdbus-1-dev \
-  libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev
+  libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev \
+  libasound2-dev libjack-jackd2-dev libfreetype-dev
 ```
 
 ## 2. Download SDL3
@@ -35,9 +36,10 @@ This command tells SDL3 to use the hardware acceleration of the Pi 4 and the low
 
 ```
 cmake -DCMAKE_BUILD_TYPE=Release \
+      -DSDL_UNIX_CONSOLE_BUILD=ON \
       -DSDL_VIDEO_DRIVER_KMSDRM=ON \
-      -DSDL_VIDEO_DRIVER_X11=OFF \
-      -DSDL_VIDEO_DRIVER_WAYLAND=OFF \
+      -DSDL_X11=OFF \
+      -DSDL_WAYLAND=OFF \
       -DSDL_OPENGL=OFF \
       -DSDL_OPENGLES=ON \
       -DSDL_ALSA=ON \
@@ -64,7 +66,22 @@ Run this command to see if the system can find the SDL3:
 pkg-config --modversion sdl3
 ```
 
-## 6. Clone mc101-pisound repository
+## 6. Install SDL3_ttf (Font Support)
+
+The M8 visual overlay requires the TrueType Font add-on to draw text. Run the following to download and compile it:
+
+```
+cd ~
+git clone --depth 1 https://github.com/libsdl-org/SDL_ttf.git
+cd SDL_ttf
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j4
+sudo make install
+sudo ldconfig
+```
+
+## 7. Clone mc101-pisound repository
 
 ```
 cd ~
@@ -72,44 +89,50 @@ git clone https://github.com/RowdyVoyeur/mc101-pisound.git
 cd mc101-pisound
 ```
 
-## 7. Run the build
+## 8. Run the build
 
 ```
 make clean
 make
 ```
 
-## 8. Install udev Rules
+## 9. Install udev Rules
 
-By default, Linux blocks regular users from talking directly to USB hardware for security. You need to tell the Pi that the user is allowed to talk to the M8.
+By default, Linux blocks regular users from talking directly to USB hardware for security. You need to tell the Pi that the system is allowed to talk to the M8 without requiring root privileges.
 
 ### Create a new rules file:
 
-```
-sudo nano /etc/udev/rules.d/50-m8.rules
-```
-
-### Paste this exact line into the file
+Copy and paste this entire line into the terminal and press Enter. This creates the configuration file and writes the correct permissions:
 
 ```
-SUBSYSTEM=="usb", ATTR{idVendor}=="16c0", ATTR{idProduct}=="048a", MODE="0666", GROUP="plugdev"
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="16c0", ATTR{idProduct}=="048a", MODE="0666", GROUP="plugdev"' | sudo tee /etc/udev/rules.d/50-m8.rules > /dev/null
 ```
 
-### Reload the rules:
+### Reload the rules
+
+Tell the system to read the new permissions you just added:
 
 ```
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-### Reboot and check system visibility
+### Apply and verify
+
+Instead of rebooting the entire system, you can just physically reset the connection.
+
+Unplug the M8 USB cable from the Raspberry Pi.
+
+Plug it back in (this forces the Pi to apply the new rules to the device).
+
+Run the following command to check if the system sees it:
 
 ```
 lsusb
 ```
 If you see something like "Van Ooijen Technische Informatica M8", it should be working fine.
 
-## 9. Run the application
+## 10. Run the application
 
 ```
 ./m8c
