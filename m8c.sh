@@ -57,18 +57,21 @@ ZEDITOR_PID=""
 PC2NOTE_PID=""
 SWAP_PID=""
 
+# Script that requires ONLY the MC-101
+if [ "$MC101_CONNECTED" = true ]; then
+  python3 /home/patch/mc101-pisound/scripts/pc2note.py &
+  PC2NOTE_PID=$!
+fi
+
+# Scripts that require the nanoKONTROL
 if [ "$NANO_CONNECTED" = true ]; then
-  # swapsceneset.py only requires the nanoKONTROL
   python3 /home/patch/mc101-pisound/scripts/swapsceneset.py &
   SWAP_PID=$!
 
+  # Script that requires BOTH the nanoKONTROL and the MC-101
   if [ "$MC101_CONNECTED" = true ]; then
-    # These require BOTH the nanoKONTROL and the MC-101
     python3 /home/patch/mc101-pisound/scripts/zeditor.py &
     ZEDITOR_PID=$!
-    
-    python3 /home/patch/mc101-pisound/scripts/pc2note.py &
-    PC2NOTE_PID=$!
   fi
 fi
 
@@ -87,5 +90,5 @@ killall -s SIGINT alsa_out alsa_in 2>/dev/null
 
 # 8. Shutdown
 # Shutdown after quitting M8C
-# sleep 2
-# sudo shutdown now
+sleep 2
+sudo shutdown now

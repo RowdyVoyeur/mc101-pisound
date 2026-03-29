@@ -13,7 +13,7 @@ sleep 2
 killall -9 alsa_out alsa_in 2>/dev/null
 sleep 2
 
-# Helper function (Mirrored exactly from your working audio_routing.sh)
+# Helper function 
 connect() {
     su patch -c "jack_connect $1 $2 >/dev/null 2>&1"
 }
@@ -25,14 +25,15 @@ if [ $(aplay -l | grep -c "MC101") -eq 0 ]; then
 else
   echo "MC101 detected. Audio will route to MC101 only."
   MC101_CONNECTED=true
-  # Spawn bridges in the background (&) using the patch user's environment
-  su patch -c "alsa_in -j MC101_in -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -c 10 &"
-  su patch -c "alsa_out -j MC101_out -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -c 4 &"
+  
+  # Use systemd-run to launch bridges safely outside the button's control trap
+  sudo systemd-run --uid=patch alsa_in -j "MC101_in" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -c 10
+  sudo systemd-run --uid=patch alsa_out -j "MC101_out" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -c 4
 fi
 
 # 4. Open M8 bridges (Always)
-su patch -c "alsa_in -j M8_in -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -c 2 &"
-su patch -c "alsa_out -j M8_out -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -c 2 &"
+sudo systemd-run --uid=patch alsa_in -j "M8_in" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -c 2
+sudo systemd-run --uid=patch alsa_out -j "M8_out" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -c 2
 
 # Wait for the new hardware bridges to initialize inside JACK
 sleep 4
