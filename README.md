@@ -145,13 +145,11 @@ Run the following command to install the module:
 patchbox module install https://github.com/RowdyVoyeur/mc101-pisound
 ```
 
-Once installed, activate the module:
+Once installed, reboot and then activate the module:
 
 ```
 patchbox module activate mc101-pisound
 ```
-
-Reboot.
 
 ## 11. Run the application
 
