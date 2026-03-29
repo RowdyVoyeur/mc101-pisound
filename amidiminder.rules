@@ -11,4 +11,6 @@ pisound <--> M8
 M8 <--> MC-101
 nanoKONTROL --> M8
 nanoKONTROL --> MC-101
-.hw <—x-> .app
+
+# Commented out to ensure Zeditor (.app) can communicate with the MC-101 (.hw)
+# .hw <-x-> .app

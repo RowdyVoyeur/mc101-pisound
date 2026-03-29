@@ -4,7 +4,44 @@ A portable device to add an Audio Input to the Roland MC-101, using Raspberry Pi
 
 M8C is a client for [Dirtywave M8](https://dirtywave.com/) headless mode. While the original [application](https://github.com/laamaa/m8c) is cross-platform and can be built for Linux, Windows, macOS, and Android, **this specific fork is optimized and tested exclusively for the Raspberry Pi 4** (running 64-bit Raspberry Pi OS Bookworm) and is tailored for integration with the Roland MC-101 and PiSound.
 
-## 1. Install Dependencies
+## 1. Install and configure Patchbox OS
+
+Download and install [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
+
+Download and unzip [Patchbox OS 2024-04-04 (Bookworm ARM64 Debian)](https://dl.blokas.io/patchbox-os/2024-04-04-Patchbox.zip).
+
+Insert the SD card to your computer's SD card reader, launch Raspberry Pi Imager and follow the steps to flash Patchbox OS.
+
+After flashing, safely remove the SD card, insert it into your Raspberry Pi and power it on.
+
+Connect your computer to the same Network as the Raspberry Pi (using an ethernet cable to connect the RPi to the network), open a Terminal window and paste the following after boot is complete (default password: `blokaslabs`). All the steps in this tutorial are done via SSH:
+
+```
+ssh-keygen -R patchbox.local
+ssh patch@patchbox.local
+```
+
+Follow the Setup Wizard instructions of the `Patchbox Configuration Utility`:
+
+- If prompted, start by updating Patchbox OS;
+
+- Then, for security reasons, change the default password;
+
+- Use the following audio settings: `Sampling Rate` of 48,000 Hz, a `Buffer Size` of 64 and a `Period` of 4;
+
+- Choose the boot environment `Console Autologin`;
+
+- When prompted, configure Wi-Fi;
+
+- Select `None: Default Patchbox OS Environment` to disable modules;
+
+- Once the Setup Wizard is finished, type `patchbox` to enter the `Patchbox Configuration Utility` and stop Bluetooth, then disconnect Wi-Fi from default network and disable WiFi hotspot;
+
+- Still in the `Patchbox Configuration Utility`, go to `kernel` and select `install-rt switch te current kernel to realtime one` to enable the RT kernel;
+
+- Reboot with ```sudo reboot```.
+
+## 2. Install dependencies
 
 Install the libraries required by SLD3 and m8c:
 
@@ -18,7 +55,7 @@ sudo apt install -y \
   libasound2-dev libjack-jackd2-dev libfreetype-dev
 ```
 
-## 2. Download SDL3
+## 3. Download SDL3
 
 Run the following to clone SDL3:
 
@@ -30,7 +67,7 @@ cd sdl3
 mkdir -p build && cd build
 ```
 
-## 3. Configure SDL3
+## 4. Configure SDL3
 
 This command tells SDL3 to use the hardware acceleration of the Pi 4 and the low-latency audio of Patchbox.
 
@@ -47,7 +84,7 @@ cmake -DCMAKE_BUILD_TYPE=Release \
       -DSDL_PULSEAUDIO=OFF ..
 ```
 
-## 4. Compile and Install SDL3
+## 5. Compile and install SDL3
 
 Run the following to compile and install SDL3:
 
@@ -57,7 +94,7 @@ sudo make install
 sudo ldconfig
 ```
 
-## 5. Verification
+## 6. Verification
 
 Run this command to see if the system can find the SDL3:
 
@@ -66,7 +103,7 @@ Run this command to see if the system can find the SDL3:
 pkg-config --modversion sdl3
 ```
 
-## 6. Install SDL3_ttf (Font Support)
+## 7. Install SDL3_ttf (Font Support)
 
 The M8 visual overlay requires the TrueType Font add-on to draw text. Run the following to download and compile it:
 
@@ -81,7 +118,7 @@ sudo make install
 sudo ldconfig
 ```
 
-## 7. Clone mc101-pisound repository
+## 8. Clone mc101-pisound repository
 
 ```
 cd ~
@@ -89,14 +126,14 @@ git clone https://github.com/RowdyVoyeur/mc101-pisound.git
 cd mc101-pisound
 ```
 
-## 8. Run the build
+## 9. Run the build
 
 ```
 make clean
 make
 ```
 
-## 9. Install the Patchbox Module
+## 10. Install the Patchbox Module
 
 To run everything automatically and manage the audio/MIDI routing, install the custom Patchbox module included in this repository.
 
@@ -105,7 +142,7 @@ This installation script will automatically configure the required USB udev rule
 Run the following command to install the module:
 
 ```
-patchbox module install /home/patch/mc101-pisound/patchbox-module
+patchbox module install https://github.com/RowdyVoyeur/mc101-pisound
 ```
 
 Once installed, activate the module:
@@ -114,7 +151,9 @@ Once installed, activate the module:
 patchbox module activate mc101-pisound
 ```
 
-## 10. Run the application
+Reboot.
+
+## 11. Run the application
 
 ```
 ./m8c
