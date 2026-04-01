@@ -174,7 +174,7 @@ patchbox module activate mc101-pisound
 - SONGROW CUE CH: 15
 
 ### Roland MC-101 System (MIDI) Settings
-- Sync Src: AUTO
+- Sync Src: INT
 - Sync Out: ON
 - SyncOut USB: ON
 - RX SartStop: ON
