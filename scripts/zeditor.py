@@ -31,43 +31,60 @@ def send_sysex(out_port, address, value, size):
     sysex_data = header + payload + [compute_checksum(payload)]
     out_port.send(mido.Message('sysex', data=sysex_data))
 
-# --- MIDI PORT SETUP ---
-try:
-    out_name = next((p for p in mido.get_output_names() if "MC-101" in p), None)
-    in_name = next((p for p in mido.get_input_names() if "nanoKONTROL" in p), None)
-    if not out_name or not in_name:
-        sys.exit("MIDI hardware not found.")
-    out_port = mido.open_output(out_name)
-    in_port = mido.open_input(in_name)
-    print(f"ZEditor Active: {in_name} -> {out_name}")
-except Exception as e:
-    sys.exit(f"Setup Error: {e}")
+def main():
+    # --- MIDI PORT SETUP ---
+    try:
+        out_name = next((p for p in mido.get_output_names() if "MC-101" in p), None)
+        if not out_name:
+            sys.exit("MC-101 hardware not found.")
+        
+        out_port = mido.open_output(out_name)
+        
+        # 1. Explicitly name this client "Zeditor" so amidiminder can plug the cable into it!
+        in_port = mido.open_input('In', virtual=True, client_name='Zeditor')
+        
+        print(f"Zeditor Active: Virtual Input -> {out_name}")
+    except Exception as e:
+        sys.exit(f"Setup Error: {e}")
 
-last_send = 0
-throttle = 0.04  # Prevents MC-101 from freezing
+    last_send = 0
+    throttle = 0.08  # Prevents MC-101 from freezing
 
-try:
-    while True:
-        for msg in in_port.iter_pending():
-            if msg.type == 'control_change' and msg.channel == NANO_CHANNEL:
-                if msg.control in PARAMETER_MAP:
-                    now = time.time()
-                    if (now - last_send) > throttle:
-                        addr, max_val, size, label = PARAMETER_MAP[msg.control]
-                        scaled_val = int((msg.value / 127.0) * max_val)
-                        
-                        send_sysex(out_port, addr, scaled_val, size)
-                        last_send = now
-                        
-                        # Send to M8 Overlay
-                        overlay_text = f"TONE EDITOR~{label}~VALUE: {scaled_val}"
-                        if os.path.exists(OVERLAY_PIPE):
-                            try:
-                                fd = os.open(OVERLAY_PIPE, os.O_WRONLY | os.O_NONBLOCK)
-                                os.write(fd, overlay_text.encode())
-                                os.close(fd)
-                            except: pass
-        time.sleep(0.001)
-finally:
-    in_port.close()
-    out_port.close()
+    # 2. THE CALLBACK ENGINE (Fixes the Linux Virtual Port bug)
+    def midi_callback(msg):
+        nonlocal last_send
+        
+        if msg.type == 'control_change' and msg.channel == NANO_CHANNEL:
+            if msg.control in PARAMETER_MAP:
+                now = time.time()
+                if (now - last_send) > throttle:
+                    addr, max_val, size, label = PARAMETER_MAP[msg.control]
+                    scaled_val = int((msg.value / 127.0) * max_val)
+                    
+                    send_sysex(out_port, addr, scaled_val, size)
+                    last_send = now
+                    
+                    # Send to M8 Overlay
+                    overlay_text = f"TONE EDITOR~{label}~VALUE: {scaled_val}"
+                    if os.path.exists(OVERLAY_PIPE):
+                        try:
+                            fd = os.open(OVERLAY_PIPE, os.O_WRONLY | os.O_NONBLOCK)
+                            os.write(fd, overlay_text.encode())
+                            os.close(fd)
+                        except: pass
+
+    # Attach the callback listener
+    in_port.callback = midi_callback
+
+    # Keep script alive in the background
+    try:
+        while True:
+            time.sleep(1) 
+    except KeyboardInterrupt:
+        pass
+    finally:
+        in_port.close()
+        out_port.close()
+
+if __name__ == "__main__":
+    main()

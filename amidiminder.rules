@@ -5,12 +5,20 @@
 # A <--> B | Connects devices A and B both ways
 # A <-x-> B | Does not allow conections between device A and device B
 
-# Customized Rules:
-
+# Hardware Rules
 pisound <--> M8
 M8 <--> MC-101
-nanoKONTROL --> M8
-nanoKONTROL --> MC-101
+
+# Software Rules
+nanoKONTROL --> nanoRouterIN
+nanoRouterOUT --> M8
+nanoRouterOUT --> MC-101
+nanoRouterOUT --> Zeditor
+
+# Blocked Connections
+nanoKONTROL <-x-> M8
+nanoKONTROL <-x-> MC-101
+nanoKONTROL <-x-> pisound
 
 # Commented out to ensure Zeditor (.app) can communicate with the MC-101 (.hw)
 # .hw <-x-> .app

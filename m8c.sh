@@ -21,12 +21,12 @@ fi
 
 # 2. Start audio bridges
 if [ "$MC101_CONNECTED" = true ]; then
-  alsa_in -j "MC101_in" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -c 10 &
-  alsa_out -j "MC101_out" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -c 4 &
+  alsa_in -j "MC101_in" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 10 &
+  alsa_out -j "MC101_out" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 4 &
 fi
 
-alsa_in -j "M8_in" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -c 2 &
-alsa_out -j "M8_out" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -c 2 &
+alsa_in -j "M8_in" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 2 &
+alsa_out -j "M8_out" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 2 &
 
 # Wait for audio bridges to initialize inside JACK safely
 sleep 4
@@ -55,20 +55,23 @@ popd
 # Define empty PID variables for safe cleanup later
 ZEDITOR_PID=""
 PC2NOTE_PID=""
-SWAP_PID=""
+NANO_PID=""
 
+# Script that requires ONLY the MC-101
+if [ "$MC101_CONNECTED" = true ]; then
+  python3 /home/patch/mc101-pisound/scripts/pc2note.py &
+  PC2NOTE_PID=$!
+fi
+
+# Scripts that require the nanoKONTROL
 if [ "$NANO_CONNECTED" = true ]; then
-  # swapsceneset.py only requires the nanoKONTROL
-  python3 /home/patch/mc101-pisound/scripts/swapsceneset.py &
-  SWAP_PID=$!
+  python3 /home/patch/mc101-pisound/scripts/nanokontroller.py &
+  NANO_PID=$!
 
+  # Script that requires BOTH the nanoKONTROL and the MC-101
   if [ "$MC101_CONNECTED" = true ]; then
-    # These require BOTH the nanoKONTROL and the MC-101
     python3 /home/patch/mc101-pisound/scripts/zeditor.py &
     ZEDITOR_PID=$!
-    
-    python3 /home/patch/mc101-pisound/scripts/pc2note.py &
-    PC2NOTE_PID=$!
   fi
 fi
 
@@ -80,12 +83,12 @@ wait $M8C_PID
 # Kill only the python scripts that were actually launched
 [ -n "$ZEDITOR_PID" ] && kill $ZEDITOR_PID 2>/dev/null
 [ -n "$PC2NOTE_PID" ] && kill $PC2NOTE_PID 2>/dev/null
-[ -n "$SWAP_PID" ] && kill $SWAP_PID 2>/dev/null
+[ -n "$NANO_PID" ] && kill $NANO_PID 2>/dev/null
 
 # Clean up audio routing
 killall -s SIGINT alsa_out alsa_in 2>/dev/null
 
 # 8. Shutdown
 # Shutdown after quitting M8C
-# sleep 2
-# sudo shutdown now
+sleep 2
+sudo shutdown now
