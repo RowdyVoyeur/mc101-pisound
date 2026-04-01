@@ -48,7 +48,7 @@ def main():
         sys.exit(f"Setup Error: {e}")
 
     last_send = 0
-    throttle = 0.12  # Prevents MC-101 from freezing
+    throttle = 0.04  # Prevents MC-101 from freezing
 
     # 2. THE CALLBACK ENGINE (Fixes the Linux Virtual Port bug)
     def midi_callback(msg):

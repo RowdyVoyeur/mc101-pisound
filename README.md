@@ -167,14 +167,14 @@ patchbox module activate mc101-pisound
 - Live Quantitize: 10 (16 Steps)
 
 ### M8 Headless MIDI Settings
-- SYNC IN:  CLK + TRASNP
-- SYNC OUT: OFF
+- SYNC IN:  TRANSPORT
+- SYNC OUT: CLOCK
 - REC. NOTE CHAN: 14
 - CC MAP CHAN: 16
 - SONGROW CUE CH: 15
 
 ### Roland MC-101 System (MIDI) Settings
-- Sync Src: INT
+- Sync Src: USB
 - Sync Out: ON
 - SyncOut USB: ON
 - RX SartStop: ON
