@@ -1,198 +1,458 @@
-# =========================================================================
-# --- MAPPING CHEAT SHEET & REFERENCE ---
-# =========================================================================
-# Incoming Key: ("cc", cc_number) OR ("note", note_number)
-# Outgoing Val: ("type", channel, target, [optional_scale], [optional_behavior])
-# Note: channel must be target-1, i.e. if the target channel is 16, must use 15
+# =========================================================================================
+# --- nanoKONTROL TO ROLAND MC-101: MASTER MAPPING CHEAT SHEET & REFERENCE ---
+# =========================================================================================
 #
+# --- 1. PRESET HIERARCHY & SETTINGS ---
+# PRESETS = { 
+#     PRESET_ID: { 
+#         "name": "Preset Name", 
+#         "display_values": True/False, # True = Show Param Values. False = Show Matrix & Auto-Swap
+#         "scenes": { 
+#             SCENE_ID: { 
+#                 "name": "Scene Name", 
+#                 "mappings": { ... } 
+#             } 
+#         } 
+#     } 
+# }
+#
+# --- 2. THE UI MATRIX ---
+# - The overlay operates as a 9x2 Matrix (Line 2 and Line 3).
+# - Input Type decides the visual style:
+#   > CCs (Knobs/Faders) display as padded text: " WAV "
+#   > Notes (Buttons) display with brackets:     "[T01]"
+# - The active parameter is highlighted as ">X<". Unmapped parameters show "---".
+#
+# --- 3. STANDARD MAPPING SYNTAX ---
+# ("in_type", number): ("out_type", channel/offset, target/max_val, [options...])
+#
+# Supported "out_type" targets:
+# - "cc": Standard MIDI CC out.
+# - "note": Standard MIDI Note out.
+# - "track_select": Internal script logic to change the active MC-101 Track (1-4).
+# - "partial_select": Internal script logic to change the active MC-101 Partial (1-4).
+# - "sysex": Direct Roland Zen-Core memory writing.
+# - "conditional_sysex": Dynamic memory writing based on the state of another parameter.
+#
+# Standard Options (Any order for CC/Note. Order matters for SysEx):
+# - Label: String (e.g., "VOL", "CUT"). Max 3 chars. 
+# - Scale: Tuple (min, max) (e.g., (0, 50)). Standard CC/Note only.
+# - Toggle: The string "toggle". Standard CC/Note only.
+#
+# --- 4. SYSEX OPTIONS & SYNTAX ---
+# ("in_type", number): ("sysex", offset(s), max_val, "LBL", byte_size, {Value_Map})
+#
+# - offset(s): Hex address (e.g., 0x3E00). Use a list [0x1C, 0x34] for Stereo Sync (L+R).
+# - max_val: Integer. The maximum hardware value. Fader is scaled 0 to this number.
+# - "LBL": 3-character string for the overlay.
+# - byte_size: Integer (e.g., 4 or 1). Roland high-res params use 4.
+# - {Value_Map}: (Optional) Dictionary translating raw numbers to overlay text.
+#                Example: {0: "PCM", 1: "VA"} -> Displays "PCM" instead of "0".
+#
+# --- 5. CONDITIONAL SYSEX SYNTAX ---
+# ("cc", 1): ("conditional_sysex", condition_cc_number, {
+#     condition_val: (offset(s), max_val, "LBL", byte_size, [val_list], {Value_Map}),
+#     ...
+# })
+# - If 'offset' is 'None', the mapping acts as a UI placeholder and sends no MIDI.
+# - [val_list]: (Optional) List translating 0-127 fader steps to specific hardware jumps.
+#               Example: [8, 10, 11] turns a 3-step fader into hardware values 8, 10, and 11.
+# - "bank_dependent": Special routing keyword to change max_vals based on MC-101 Wave Bank.
+#
+# =========================================================================================
 # --- EXAMPLES ---
-# 1. Standard (0-127, Momentary)
-#    ("cc", 0): ("cc", 14, 10),
+# =========================================================================================
+# 1. Standard CC: 
+#    ("cc", 0): ("cc", 14, 10, "VOL"),
 #
-# 2. SCALED (Restricting the range)
-#    ("cc", 1): ("cc", 14, 11, (0, 50)),
+# 2. Track / Partial Selection (Buttons):
+#    ("note", 0): ("track_select", 1, "T01"),
+#    ("note", 9): ("partial_select", 2, "P02"),
 #
-# 3. TOGGLE BEHAVIOR (Press once for 127, press again for 0)
-#    ("note", 24): ("note", 14, 60, "toggle"),
+# 3. SysEx w/ Text Value Map (Displays "PCM" or "VA" on screen):
+#    ("cc", 0): ("sysex", 0x3E00, 4, "OTY", 1, {0: "PCM", 1: "VA"}),
 #
-# 4. SCALED + TOGGLE (Press once for 50, press again for 10)
-#    ("cc", 2): ("cc", 14, 12, (10, 50), "toggle"),
-#
-# 5. Program Change
-#    ("note", 0): ("pc", 12, 5),
-# =========================================================================
+# 4. Conditional SysEx w/ Stereo Sync & Hardware Value Jumps (Bank Select):
+#    ("cc", 2): ("conditional_sysex", 0, {
+#        0: ([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], {8: "A", 10: "B", 11: "C"}), 
+#        1: (0x3E06, 127, "PW ", 1)
+#    }),
+# =========================================================================================
 
 #!/usr/bin/env python3
 import sys, time, os, mido
+import threading
 
 # --- CONFIGURATION ---
 OVERLAY_PIPE = "/tmp/m8c_overlay"
 
-# Transport Buttons (Used to switch presets)
-PRESET_1_CC = 127 # Rewind
-PRESET_2_CC = 126 # Play
-PRESET_3_CC = 125 # FastFwd
-PRESET_4_CC = 124 # Loop
-PRESET_5_CC = 123 # Stop
-PRESET_6_CC = 122 # Rec
+# Transport Buttons
+PRESET_1 = 127 # Rewind
+PRESET_4 = 124 # Loop
+PRESET_6 = 122 # Rec
 
 # Global State
-active_preset = PRESET_1_CC
+active_preset = PRESET_1
+active_scene = 1
+active_track = 1
+active_partial = 1
+
+last_edited_label = None
+last_edited_val = None
+last_edited_text = None  
+last_sysex_time = 0
+last_interaction_time = 0
+last_touched_type = "cc" 
 toggle_states = {}  
+param_states = {}  
+
+# --- VALUE MAPS ---
+OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
+BANK_LABELS = {8: "A", 10: "B", 11: "C"}
+VA_WAVE_LABELS = {0:"SAW", 1:"SQR", 2:"TRI", 3:"SIN", 4:"RMP", 5:"JUN", 6:"TR2", 7:"TR3", 8:"SI2"}
 
 PRESETS = {
-    PRESET_1_CC: {
-        "name": "M8 MIXER",
-        "description": "Allows to mix, mute and solo M8 tracks",
-        "mappings": {
-            ("cc", 0): ("cc", 15, 3),               
-            ("cc", 1): ("cc", 15, 14),  
-            ("cc", 2): ("cc", 15, 21),    
-            ("note", 0): ("note", 15, 12),           # Momentary
-            ("note", 1): ("note", 15, 13, "toggle"), # Toggle
-            ("note", 2): ("note", 15, 14, "toggle"), # Toggle
+    PRESET_1: {
+        "name": "M8",
+        "display_values": False, 
+        "scenes": {
+            1: {
+                "name": "MIXER",
+                "mappings": {
+                    ("cc", 0): ("cc", 15, 1, "001"),
+                    ("cc", 1): ("cc", 15, 2, "002"),
+                    ("note", 0): ("note", 15, 12, "toggle", "M01"),
+                    ("note", 1): ("note", 15, 13, "toggle", "M02"),
+                }    
+            }
         }
     },
-PRESET_4_CC: {
-        "name": "MC-101 PARTIAL EDITOR",
-        "description": "Allows to edit several parameters of the tone partial editor",
-        "mappings": {
-            ("cc", 0): ("cc", 11, 0),  # Fader 1 (CC 0) -> Zeditor CC 0
-            ("cc", 1): ("cc", 11, 1),  # Fader 2 (CC 1) -> Zeditor CC 1
-            ("cc", 2): ("cc", 11, 2),  # Fader 3 (CC 2) -> Zeditor CC 2
+    PRESET_4: {
+        "name": "MC-101",
+        "display_values": True, 
+        "scenes": {
+            1: {
+                "name": "TRACK 2",
+                "mappings": {
+                    ("cc", 0): ("cc", 1, 74, "CUT"),
+                    ("cc", 1): ("cc", 1, 71, "RES"),
+                }    
+            }
+        }
+    },
+    PRESET_6: {
+        "name": "MC-101",
+        "display_values": True, 
+        "scenes": {
+            1: {
+                "name": "OSC",
+                "mappings": {
+                    ("cc", 0): ("sysex", 0x3E00, 4, "OTY", 1, OSC_TYPE_LABELS),       
+                    ("cc", 1): ("conditional_sysex", 0, {
+                        0: (None, 0, "---", 1),              
+                        1: (0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS) 
+                    }),
+                    ("cc", 2): ("conditional_sysex", 0, {
+                        0: ([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], BANK_LABELS), 
+                        1: (0x3E06, 127, "PW ", 1) 
+                    }),
+                    ("cc", 3): ("conditional_sysex", 0, {
+                        0: ("bank_dependent", {
+                             8: ([0x2020, 0x2038], 963, "WNO", 4),
+                            10: ([0x2020, 0x2038], 257, "WNO", 4),
+                            11: ([0x2020, 0x2038], 620, "WNO", 4)
+                        }),
+                        1: (0x3E07, 126, "PWD", 1, list(range(1, 128))) 
+                    }),
+                    ("note", 0): ("track_select", 1, "T01"),
+                    ("note", 1): ("track_select", 2, "T02"),
+                    ("note", 2): ("track_select", 3, "T03"),
+                    ("note", 3): ("track_select", 4, "T04"),
+                    ("note", 9): ("partial_select", 1, "P01"),
+                    ("note", 10): ("partial_select", 2, "P02"),
+                    ("note", 11): ("partial_select", 3, "P03"),
+                    ("note", 12): ("partial_select", 4, "P04"),
+                }
+            }
         }
     }
 }
 
-def update_overlay(action_text=""):
-    preset_data = PRESETS.get(active_preset, {})
-    preset_name = preset_data.get("name", "UNKNOWN PRESET")
-    preset_desc = preset_data.get("description", "")
+# --- ROLAND SYSEX HELPERS ---
+def compute_checksum(payload):
+    return (128 - (sum(payload) % 128)) % 128
+
+def send_sysex(out_port, address, value, size):
+    DEVICE_ID = 0x10
+    MODEL_ID = [0x00, 0x00, 0x00, 0x5E]
+    header = [0x41, DEVICE_ID] + MODEL_ID + [0x12]
+    addr_bytes = [(address >> 24) & 0x7F, (address >> 16) & 0x7F, (address >> 8) & 0x7F, address & 0x7F]
+    if size == 4: data_bytes = [(value >> 12) & 0x0F, (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F]
+    else: data_bytes = [value & 0x7F]
+    payload = addr_bytes + data_bytes
+    sysex_data = header + payload + [compute_checksum(payload)]
+    out_port.send(mido.Message('sysex', data=sysex_data))
+
+def get_mc101_address(track, partial, param_offset):
+    track_bases = {1: 0x30200000, 2: 0x30420000, 3: 0x30640000, 4: 0x31060000}
+    base = track_bases.get(track, 0x30200000)
+    partial_offset = (partial - 1) * 0x00000100
+    return base + partial_offset + param_offset
+
+def get_mapping_label(m):
+    if not m: return "---"
+    out_type = m[0]
     
-    overlay_text = f"nanoKONTROL Preset: {preset_name}~{preset_desc}~{action_text}"
-    
+    if out_type == "conditional_sysex":
+        cond_val = param_states.get((active_track, active_partial, m[1]), 0)
+        target = m[2].get(cond_val)
+        if target:
+            if target[0] == "bank_dependent":
+                bank_val = param_states.get((active_track, active_partial, 2), 8)
+                res = target[1].get(bank_val)
+                return res[2] if res else "---"
+            return target[2]
+        return "---"
+    elif out_type in ["track_select", "partial_select"]:
+        return m[2]
+    else:
+        for item in m[3:]:
+            if isinstance(item, str) and item != "toggle": return item
+    return "---"
+
+def schedule_matrix_swap(preset_num, scene_num, trigger_time):
+    time.sleep(2.5)
+    if active_preset == preset_num and active_scene == scene_num:
+        if last_interaction_time <= trigger_time:
+            global last_touched_type
+            last_touched_type = "note"
+            update_overlay()
+
+def clear_overlay():
     if os.path.exists(OVERLAY_PIPE):
         try:
             fd = os.open(OVERLAY_PIPE, os.O_WRONLY | os.O_NONBLOCK)
-            os.write(fd, overlay_text.encode())
+            os.write(fd, b" \n")
             os.close(fd)
-        except:
-            pass
-    print(overlay_text.replace("~", " | ")) 
+        except: pass
 
-def scale_value(val, out_min, out_max):
-    scaled = out_min + (val / 127.0) * (out_max - out_min)
-    return int(round(scaled))
+# --- OVERLAY ENGINE ---
+def update_overlay():
+    preset_data = PRESETS.get(active_preset, {})
+    scene_data = preset_data.get("scenes", {}).get(active_scene, {})
+    display_vals = preset_data.get("display_values", True)
+    scene_name = scene_data.get("name", f"S{active_scene}")
+    preset_name = preset_data.get('name', 'NONE')
+    
+    if active_preset == PRESET_6:
+        tr_str = f"T{active_track:02d}"
+        pa_str = f"P{active_partial:02d}"
+        if display_vals:
+            lbl_str = last_edited_label if last_edited_label else "READY"
+            val_display = last_edited_text if last_edited_text else (str(last_edited_val) if last_edited_val is not None else "")
+            line1 = f"{preset_name} > {tr_str} > {pa_str} > {scene_name} > {lbl_str} {val_display}"
+        else:
+            line1 = f"{preset_name} > {tr_str} > {pa_str} > {scene_name} "
+    else:
+        # BUG FIX: Ensure non-ZEDITOR presets push their values to Line 1
+        if display_vals:
+            lbl_str = last_edited_label if last_edited_label else "READY"
+            val_display = last_edited_text if last_edited_text else (str(last_edited_val) if last_edited_val is not None else "")
+            line1 = f"{preset_name} > {scene_name} > {lbl_str} {val_display}"
+        else:
+            line1 = f"{preset_name} > {scene_name} "
+    
+    mappings = scene_data.get("mappings", {})
+    all_labels = []
+    
+    for i in range(18):
+        key = (last_touched_type, i) 
+        label = get_mapping_label(mappings.get(key))
+        
+        if label.strip() == "":
+            core_str = "   "
+        elif label == last_edited_label:
+            core_str = ">X<"
+        else:
+            core_str = str(label).strip()[:3].upper().ljust(3, " ")
+            if core_str == "---" and key not in mappings:
+                core_str = "---"
+
+        all_labels.append(core_str)
+
+    if last_touched_type == "cc":
+        line2 = " | ".join(all_labels[:9])
+        line3 = " | ".join(all_labels[9:18])
+    else:
+        line2 = " : ".join(all_labels[:9])
+        line3 = " : ".join(all_labels[9:18])
+
+    # BUG FIX: .ljust(55) pads strings with invisible spaces to "wipe" old ghost artifacts (like the "M")
+    overlay_text = f"{line1.ljust(45)}~{line2.ljust(55)}~{line3.ljust(55)}\n"
+    if os.path.exists(OVERLAY_PIPE):
+        try:
+            fd = os.open(OVERLAY_PIPE, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(fd, overlay_text.encode()); os.close(fd)
+        except: pass
 
 def main():
-    global active_preset, toggle_states
+    global active_preset, active_scene, active_track, active_partial
+    global last_edited_label, last_edited_val, last_edited_text, last_sysex_time
+    global toggle_states, param_states, last_touched_type, last_interaction_time
 
     try:
         in_port = mido.open_input('In', virtual=True, client_name='nanoRouterIN')
         out_port = mido.open_output('Out', virtual=True, client_name='nanoRouterOUT')
-        print("Router Active: Virtual Ports Opened.")
-    except Exception as e:
-        sys.exit(f"Failed to open virtual ports: {e}")
+    except Exception as e: sys.exit(f"Failed: {e}")
 
-    update_overlay("ROUTER INITIALIZED")
+    update_overlay()
 
-    # --- THE CALLBACK ENGINE ---
     def midi_callback(msg):
-        global active_preset, toggle_states
+        global active_preset, active_scene, active_track, active_partial
+        global last_edited_label, last_edited_val, last_edited_text, last_sysex_time
+        global toggle_states, param_states, last_touched_type, last_interaction_time
         
-        # 1. CHECK FOR PRESET CHANGES
+        if msg.type == 'sysex' and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
+            active_scene = msg.data[8] + 1
+            update_overlay()
+            return
+            
         if msg.type == 'control_change' and msg.control in PRESETS:
             if msg.value > 0: 
                 active_preset = msg.control
-                update_overlay("PRESET LOADED")
+                preset_info = PRESETS.get(active_preset, {})
+                last_edited_label, last_edited_val, last_edited_text = None, None, None
+                
+                trigger_time = time.time()
+                last_interaction_time = trigger_time
+                
+                if preset_info.get("display_values", True) == False:
+                    last_touched_type = "cc"
+                    threading.Thread(target=schedule_matrix_swap, args=(active_preset, active_scene, trigger_time), daemon=True).start()
+                
+                update_overlay()
             return 
 
-        # 2. ROUTE THE MIDI DATA
-        mappings = PRESETS.get(active_preset, {}).get("mappings", {})
-        
-        lookup_key = None
         if msg.type == 'control_change':
             lookup_key = ("cc", msg.control)
+            val = msg.value
+            is_press = val > 0
+            last_touched_type = "cc"
         elif msg.type in ['note_on', 'note_off']:
             lookup_key = ("note", msg.note)
+            val = getattr(msg, 'velocity', 0)
+            is_press = (msg.type == 'note_on' and val > 0)
+            last_touched_type = "note"
+        else:
+            return
 
-        if lookup_key and lookup_key in mappings:
-            mapped_data = mappings[lookup_key]
-            out_type = mapped_data[0]
-            out_channel = mapped_data[1]
-            out_target = mapped_data[2]
-            
-            # --- PROPERLY DETECT PRESS VS RELEASE ---
-            if msg.type == 'control_change':
-                val_to_send = msg.value
-                is_press = msg.value > 0
-            elif msg.type == 'note_on':
-                val_to_send = msg.velocity
-                is_press = msg.velocity > 0
-            elif msg.type == 'note_off':
-                val_to_send = 0  # Force weird release velocities (like 64) to 0
-                is_press = False
-            
-            out_min, out_max = None, None
-            is_toggle = False
-            
-            if len(mapped_data) > 3:
-                for opt in mapped_data[3:]:
-                    if isinstance(opt, tuple) and len(opt) == 2:
-                        out_min, out_max = opt
-                    elif opt == "toggle":
-                        is_toggle = True
+        last_interaction_time = time.time()
+        preset_info = PRESETS.get(active_preset, {})
+        scene_mappings = preset_info.get("scenes", {}).get(active_scene, {}).get("mappings", {})
 
-            # --- TOGGLE LOGIC ---
-            if is_toggle:
-                if not is_press:
-                    return # Completely ignore the physical button release
+        if lookup_key in scene_mappings:
+            m = scene_mappings[lookup_key]
+            out_type = m[0]
+            
+            if out_type == "track_select" and is_press:
+                active_track = m[1]
+                last_edited_label = m[2]
+                last_edited_val, last_edited_text = None, None
+                if preset_info.get("display_values", True): update_overlay()
+                else: clear_overlay()
+                return
                 
-                state_key = (active_preset, lookup_key)
-                current_state = toggle_states.get(state_key, False)
-                new_state = not current_state
-                toggle_states[state_key] = new_state
-                
-                val_to_send = 127 if new_state else 0
+            if out_type == "partial_select" and is_press:
+                active_partial = m[1]
+                last_edited_label = m[2]
+                last_edited_val, last_edited_text = None, None
+                if preset_info.get("display_values", True): update_overlay()
+                else: clear_overlay()
+                return
 
-            # --- SCALING LOGIC ---
-            if out_min is not None and out_max is not None:
-                val_to_send = scale_value(val_to_send, out_min, out_max)
-            
-            # --- OUTPUT DISPATCHER ---
-            if out_type == "cc":
-                val_to_send = max(0, min(127, val_to_send))
-                out_msg = mido.Message('control_change', channel=out_channel, control=out_target, value=val_to_send)
-                out_port.send(out_msg)
-
-            elif out_type == "note":
-                if is_toggle or msg.type == 'control_change':
-                    # If we are artificially generating the state, force clean Note On/Off commands
-                    note_type = 'note_on' if val_to_send > 0 else 'note_off'
-                    vel = val_to_send if val_to_send > 0 else 0
-                    out_msg = mido.Message(note_type, channel=out_channel, note=out_target, velocity=vel)
-                    out_port.send(out_msg)
+            if out_type in ["sysex", "conditional_sysex"]:
+                target = None
+                if out_type == "sysex":
+                    target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, None, m[5] if len(m) > 5 else None)
                 else:
-                    # Standard Momentary pass-through
-                    out_msg = mido.Message(msg.type, channel=out_channel, note=out_target, velocity=val_to_send)
-                    out_port.send(out_msg)
+                    cond_val = param_states.get((active_track, active_partial, m[1]), 0)
+                    target = m[2].get(cond_val)
+                    if target and target[0] == "bank_dependent":
+                        bank_val = param_states.get((active_track, active_partial, 2), 8)
+                        target = target[1].get(bank_val)
 
-            elif out_type == "pc":
-                if is_press: # Only trigger Program Changes when you push down!
-                    out_msg = mido.Message('program_change', channel=out_channel, program=out_target)
-                    out_port.send(out_msg)
+                if not target or target[0] is None: return
 
-    # Attach the callback listener
+                offsets = target[0] if isinstance(target[0], list) else [target[0]]
+                max_val, lbl, size = target[1], target[2], target[3]
+                val_list = target[4] if len(target) > 4 else None
+                txt_map = target[5] if len(target) > 5 else None
+
+                now = time.time()
+                if (now - last_sysex_time) > 0.08:
+                    scaled_val = int(round((val / 127.0) * max_val))
+                    final_val = val_list[scaled_val] if val_list else scaled_val
+                    
+                    param_states[(active_track, active_partial, msg.control)] = final_val
+                    
+                    for off in offsets:
+                        send_sysex(out_port, get_mc101_address(active_track, active_partial, off), final_val, size)
+                    
+                    if lbl in ["BNK", "WNO"]:
+                        send_sysex(out_port, get_mc101_address(active_track, active_partial, 0x1B), 0, 1)
+
+                    last_sysex_time = now
+                    last_edited_label, last_edited_val = lbl, final_val
+                    last_edited_text = txt_map.get(final_val) if txt_map else None
+                    
+                    if preset_info.get("display_values", True): update_overlay()
+                    else: clear_overlay()
+            
+            else: # Standard CC / Note Mapping Engine
+                lbl = get_mapping_label(m)
+                is_toggle = ("toggle" in m[3:]) if len(m) > 3 else False
+                
+                if is_toggle:
+                    if not is_press: return # Completely ignore physical button release
+                    
+                    state_key = (active_preset, active_scene, lookup_key)
+                    new_state = not toggle_states.get(state_key, False)
+                    toggle_states[state_key] = new_state
+                    
+                    # BUG FIX: Reverted to true state output 127/0 instead of rapid pulse trigger
+                    if out_type == "note":
+                        out_port.send(mido.Message('note_on' if new_state else 'note_off', channel=m[1], note=m[2], velocity=127 if new_state else 0))
+                    elif out_type == "cc":
+                        out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=127 if new_state else 0))
+                    
+                    if preset_info.get("display_values", True):
+                        last_edited_label, last_edited_val, last_edited_text = lbl, None, "ON" if new_state else "OFF"
+                        update_overlay()
+                    else:
+                        clear_overlay()
+                        
+                else: # Momentary / Standard Pass-through
+                    if out_type == "cc":
+                        out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=val))
+                    elif out_type == "note":
+                        out_port.send(mido.Message('note_on' if val > 0 else 'note_off', channel=m[1], note=m[2], velocity=val))
+                    
+                    if preset_info.get("display_values", True):
+                        if msg.type == 'control_change' or is_press:
+                            # BUG FIX: Enforced strict separation so CCs output 0-127 and Notes output ON/OFF
+                            if out_type == "cc":
+                                last_edited_label, last_edited_val, last_edited_text = lbl, val, None
+                            else:
+                                last_edited_label, last_edited_val, last_edited_text = lbl, None, "ON" if is_press else "OFF"
+                            update_overlay()
+                    else:
+                        if msg.type == 'control_change' or is_press: 
+                            clear_overlay()
+
     in_port.callback = midi_callback
-
     try:
-        while True:
-            time.sleep(1) 
-    except KeyboardInterrupt:
-        pass
-    finally:
-        in_port.close()
-        out_port.close()
+        while True: time.sleep(1) 
+    except KeyboardInterrupt: pass
+    finally: in_port.close(); out_port.close()
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

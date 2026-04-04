@@ -1,24 +1,30 @@
-# Rules Format (ports can be specified by name or by number):
+# --- RULES FORMAT ---
+# Ports can be specified by name or by number
 
 # A --> B | Connects device A to device B
 # A <-- B | Connects device B to device A
 # A <--> B | Connects devices A and B both ways
 # A <-x-> B | Does not allow conections between device A and device B
 
-# Hardware Rules
-pisound <--> M8
-M8 <--> MC-101
+# --- MIDI ROUTING RULES ---
 
-# Software Rules
+# 1. Controller to Script
+# Route physical hardware to the Python sript
 nanoKONTROL --> nanoRouterIN
+
+# 2. Script to Instruments
+# Route processed MIDI out to the gear
 nanoRouterOUT --> M8
 nanoRouterOUT --> MC-101
-nanoRouterOUT --> Zeditor
 
-# Blocked Connections
-nanoKONTROL <-x-> M8
-nanoKONTROL <-x-> MC-101
-nanoKONTROL <-x-> pisound
+# 3. Hardware Sync & Interface
+# Keep the hardware gear and Pisound synced together
+M8 <--> MC-101
+pisound <--> M8
 
-# Commented out to ensure Zeditor (.app) can communicate with the MC-101 (.hw)
-# .hw <-x-> .app
+# 4. Critical Blocks
+# Prevent the hardware from hearing the raw nanoKONTROL messages
+# This forces all traffic to go trhough the script first
+nanoKONTROL -x-> M8
+nanoKONTROL -x-> MC-101
+nanoKONTROL -x-> pisound

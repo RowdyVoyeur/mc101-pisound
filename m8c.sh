@@ -53,7 +53,6 @@ popd
 
 # 5. Conditional Python scripts
 # Define empty PID variables for safe cleanup later
-ZEDITOR_PID=""
 PC2NOTE_PID=""
 NANO_PID=""
 
@@ -63,16 +62,10 @@ if [ "$MC101_CONNECTED" = true ]; then
   PC2NOTE_PID=$!
 fi
 
-# Scripts that require the nanoKONTROL
+# The Master Script: Requires the nanoKONTROL
 if [ "$NANO_CONNECTED" = true ]; then
   python3 /home/patch/mc101-pisound/scripts/nanokontroller.py &
   NANO_PID=$!
-
-  # Script that requires BOTH the nanoKONTROL and the MC-101
-  if [ "$MC101_CONNECTED" = true ]; then
-    python3 /home/patch/mc101-pisound/scripts/zeditor.py &
-    ZEDITOR_PID=$!
-  fi
 fi
 
 # 6. Hold script open
@@ -81,7 +74,6 @@ wait $M8C_PID
 
 # 7. Cleanup
 # Kill only the python scripts that were actually launched
-[ -n "$ZEDITOR_PID" ] && kill $ZEDITOR_PID 2>/dev/null
 [ -n "$PC2NOTE_PID" ] && kill $PC2NOTE_PID 2>/dev/null
 [ -n "$NANO_PID" ] && kill $NANO_PID 2>/dev/null
 
