@@ -22,11 +22,15 @@ fi
 # 2. Start audio bridges
 if [ "$MC101_CONNECTED" = true ]; then
   alsa_in -j "MC101_in" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 10 &
+  sleep 0.5
   alsa_out -j "MC101_out" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 4 &
+  sleep 0.5
 fi
 
 alsa_in -j "M8_in" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 2 &
+sleep 0.5
 alsa_out -j "M8_out" -d hw:M8,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 2 &
+sleep 0.5
 
 # Wait for audio bridges to initialize inside JACK safely
 sleep 4

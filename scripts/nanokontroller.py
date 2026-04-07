@@ -110,6 +110,12 @@ param_states = {}
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
 BANK_LABELS = {8: "A", 10: "B", 11: "C"}
 VA_WAVE_LABELS = {0:"SAW", 1:"SQR", 2:"TRI", 3:"SIN", 4:"RMP", 5:"JUN", 6:"TR2", 7:"TR3", 8:"SI2"}
+PWD_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
+SYN_WAVE_LABELS = {i: f"{i+1:02d}" for i in range(48)}
+CRS_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(16, 113)}
+FIN_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(14, 115)}
+PAN_LABELS = {i: f"R{i-64}" if i > 64 else (f"L{64-i}" if i < 64 else "C") for i in range(128)}
+ST1_LABELS = {0: "OFF", 1: "SNC", 2: "RNG", 3: "XMD", 4: "XM2"}
 
 PRESETS = {
     PRESET_1: {
@@ -145,33 +151,123 @@ PRESETS = {
         "display_values": True, 
         "scenes": {
             1: {
-                "name": "OSC",
+                "name": "OSC & COMMON",
                 "mappings": {
                     ("cc", 0): ("sysex", 0x3E00, 4, "OTY", 1, OSC_TYPE_LABELS),       
-                    ("cc", 1): ("conditional_sysex", 0, {
+                    ("cc", 1): ("conditional_sysex", ("cc", 0), {
                         0: (None, 0, "---", 1),              
-                        1: (0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS) 
+                        1: (0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS),
+                        2: (None, 0, "---", 1),  
+                        3: (None, 0, "---", 1)   
                     }),
-                    ("cc", 2): ("conditional_sysex", 0, {
+                    ("cc", 2): ("conditional_sysex", ("cc", 0), {
                         0: ([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], BANK_LABELS), 
-                        1: (0x3E06, 127, "PW ", 1) 
+                        1: (0x3E06, 127, "PW ", 1),
+                        2: (0x3E02, 47, "WAV", 4, None, SYN_WAVE_LABELS),  
+                        3: (0x3E08, 127, "DET", 1) 
                     }),
-                    ("cc", 3): ("conditional_sysex", 0, {
+                    ("cc", 3): ("conditional_sysex", ("cc", 0), {
                         0: ("bank_dependent", {
-                             8: ([0x2020, 0x2038], 963, "WNO", 4),
-                            10: ([0x2020, 0x2038], 257, "WNO", 4),
-                            11: ([0x2020, 0x2038], 620, "WNO", 4)
+                             8: ([0x2020, 0x2038], 963, "WAV", 4),
+                            10: ([0x2020, 0x2038], 257, "WAV", 4),
+                            11: ([0x2020, 0x2038], 620, "WAV", 4)
                         }),
-                        1: (0x3E07, 126, "PWD", 1, list(range(1, 128))) 
+                        1: (0x3E07, 126, "PWD", 1, list(range(1, 128)), PWD_LABELS),
+                        2: (None, 0, "---", 1),  
+                        3: (None, 0, "---", 1)   
                     }),
+                    
+                    # --- TONE SYNTH PMT MAPPINGS (Base 0x3D00) ---
+                    # Structure 1-2
+                    ("cc", 4): ("sysex_track", 0x3D00, 4, "ST1", 1, ST1_LABELS),
+                    
+                    ("cc", 5): ("conditional_sysex_track", ("cc", 4), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (0x3D02, 127, "RNG", 1),           
+                        3: (0x3D08, 10800, "MOD", 4),         
+                        4: (0x3D15, 127, "MOD", 1)            
+                    }),
+
+                    ("cc", 13): ("conditional_sysex_track", ("cc", 4), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (0x3D04, 127, "LV1", 1),           
+                        3: (0x3D10, 127, "LV1", 1),           
+                        4: (0x3D10, 127, "LV1", 1)            
+                    }),
+
+                    ("cc", 14): ("conditional_sysex_track", ("cc", 4), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (0x3D05, 127, "LV2", 1),           
+                        3: (0x3D11, 127, "LV2", 1),           
+                        4: (0x3D11, 127, "LV2", 1)            
+                    }),
+
+                    # Structure 3-4
+                    ("cc", 6): ("sysex_track", 0x3D01, 4, "ST3", 1, ST1_LABELS),
+                    
+                    ("cc", 7): ("conditional_sysex_track", ("cc", 6), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (0x3D03, 127, "RNG", 1),           
+                        3: (0x3D0C, 10800, "MOD", 4),         
+                        4: (0x3D16, 127, "MOD", 1)            
+                    }),
+
+                    ("cc", 15): ("conditional_sysex_track", ("cc", 6), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (0x3D06, 127, "LV3", 1),           
+                        3: (0x3D12, 127, "LV3", 1),           
+                        4: (0x3D12, 127, "LV3", 1)            
+                    }),
+
+                    ("cc", 16): ("conditional_sysex_track", ("cc", 6), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (0x3D07, 127, "LV4", 1),           
+                        3: (0x3D13, 127, "LV4", 1),           
+                        4: (0x3D13, 127, "LV4", 1)            
+                    }),
+
+                    # --- TONE PARTIAL MAPPINGS (Base 0x2000) ---
+                    ("cc", 9): ("sysex", 0x2001, 96, "CRS", 1, list(range(16, 113)), CRS_LABELS),
+                    ("cc", 10): ("sysex", 0x2002, 100, "FIN", 1, list(range(14, 115)), FIN_LABELS),
+                    ("cc", 11): ("sysex", 0x2000, 127, "LEV", 1), 
+                    ("cc", 12): ("sysex", 0x2007, 127, "PAN", 1, None, PAN_LABELS),
+
                     ("note", 0): ("track_select", 1, "T01"),
                     ("note", 1): ("track_select", 2, "T02"),
                     ("note", 2): ("track_select", 3, "T03"),
                     ("note", 3): ("track_select", 4, "T04"),
+                    
+                    # Partial Phase Lock (Conditioned on Structure 1-2)
+                    ("note", 4): ("conditional_sysex_track", ("cc", 4), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (None, 0, "---", 1),
+                        3: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}),
+                        4: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"})
+                    }, "toggle"),
+
+                    # Partial Phase Lock (Conditioned on Structure 3-4)
+                    ("note", 6): ("conditional_sysex_track", ("cc", 6), {
+                        0: (None, 0, "---", 1),
+                        1: (None, 0, "---", 1),
+                        2: (None, 0, "---", 1),
+                        3: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}),
+                        4: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"})
+                    }, "toggle"),
+
                     ("note", 9): ("partial_select", 1, "P01"),
                     ("note", 10): ("partial_select", 2, "P02"),
                     ("note", 11): ("partial_select", 3, "P03"),
                     ("note", 12): ("partial_select", 4, "P04"),
+                    
+                    # --- TONE COMMON PARAMETERS (Base 0x1000) ---
+                    ("note", 13): ("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"),
                 }
             }
         }
@@ -203,12 +299,13 @@ def get_mapping_label(m):
     if not m: return "---"
     out_type = m[0]
     
-    if out_type == "conditional_sysex":
-        cond_val = param_states.get((active_track, active_partial, m[1]), 0)
+    if out_type in ["conditional_sysex", "conditional_sysex_track"]:
+        # FIX: Look for track-level states first, then partial-level states
+        cond_val = param_states.get((active_track, 'track', m[1]), param_states.get((active_track, active_partial, m[1]), 0))
         target = m[2].get(cond_val)
         if target:
             if target[0] == "bank_dependent":
-                bank_val = param_states.get((active_track, active_partial, 2), 8)
+                bank_val = param_states.get((active_track, 'track', ("cc", 2)), param_states.get((active_track, active_partial, ("cc", 2)), 8))
                 res = target[1].get(bank_val)
                 return res[2] if res else "---"
             return target[2]
@@ -254,7 +351,6 @@ def update_overlay():
         else:
             line1 = f"{preset_name} > {tr_str} > {pa_str} > {scene_name} "
     else:
-        # BUG FIX: Ensure non-ZEDITOR presets push their values to Line 1
         if display_vals:
             lbl_str = last_edited_label if last_edited_label else "READY"
             val_display = last_edited_text if last_edited_text else (str(last_edited_val) if last_edited_val is not None else "")
@@ -287,7 +383,6 @@ def update_overlay():
         line2 = " : ".join(all_labels[:9])
         line3 = " : ".join(all_labels[9:18])
 
-    # BUG FIX: .ljust(55) pads strings with invisible spaces to "wipe" old ghost artifacts (like the "M")
     overlay_text = f"{line1.ljust(45)}~{line2.ljust(55)}~{line3.ljust(55)}\n"
     if os.path.exists(OVERLAY_PIPE):
         try:
@@ -353,7 +448,25 @@ def main():
         if lookup_key in scene_mappings:
             m = scene_mappings[lookup_key]
             out_type = m[0]
+            is_track_level = out_type in ["sysex_track", "dynamic_sysex_track", "conditional_sysex_track"]
             
+            # --- UNIFIED TOGGLE ENGINE ---
+            is_toggle = ("toggle" in m)
+            if is_toggle:
+                if not is_press: return 
+                
+                if out_type == "dynamic_sysex_track":
+                    state_key = (active_preset, active_scene, lookup_key, active_partial)
+                elif is_track_level:
+                    state_key = (active_preset, active_scene, lookup_key, 'track')
+                else:
+                    state_key = (active_preset, active_scene, lookup_key, active_partial)
+                    
+                new_state = not toggle_states.get(state_key, False)
+                toggle_states[state_key] = new_state
+                val = 127 if new_state else 0
+            
+            # --- INTERNAL ROUTING ---
             if out_type == "track_select" and is_press:
                 active_track = m[1]
                 last_edited_label = m[2]
@@ -370,15 +483,26 @@ def main():
                 else: clear_overlay()
                 return
 
-            if out_type in ["sysex", "conditional_sysex"]:
+            # --- EXTERNAL MIDI ROUTING ---
+            if out_type in ["sysex", "conditional_sysex", "sysex_track", "dynamic_sysex_track", "conditional_sysex_track"]:
                 target = None
-                if out_type == "sysex":
-                    target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, None, m[5] if len(m) > 5 else None)
-                else:
-                    cond_val = param_states.get((active_track, active_partial, m[1]), 0)
+                
+                if out_type in ["sysex", "sysex_track"]:
+                    v_list = m[5] if len(m) > 5 and isinstance(m[5], list) else None
+                    t_map = m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None)
+                    target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, v_list, t_map)
+                elif out_type == "dynamic_sysex_track":
+                    offset_dict = m[1]
+                    offset = offset_dict.get(active_partial, 0x0000)
+                    v_list = m[5] if len(m) > 5 and isinstance(m[5], list) else None
+                    t_map = m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None)
+                    target = (offset, m[2], m[3], m[4] if len(m) > 4 else 1, v_list, t_map)
+                else: # handles both conditional_sysex and conditional_sysex_track
+                    # FIX: Look for track-level states first, then partial-level states
+                    cond_val = param_states.get((active_track, 'track', m[1]), param_states.get((active_track, active_partial, m[1]), 0))
                     target = m[2].get(cond_val)
                     if target and target[0] == "bank_dependent":
-                        bank_val = param_states.get((active_track, active_partial, 2), 8)
+                        bank_val = param_states.get((active_track, 'track', ("cc", 2)), param_states.get((active_track, active_partial, ("cc", 2)), 8))
                         target = target[1].get(bank_val)
 
                 if not target or target[0] is None: return
@@ -389,14 +513,17 @@ def main():
                 txt_map = target[5] if len(target) > 5 else None
 
                 now = time.time()
-                if (now - last_sysex_time) > 0.08:
+                if is_toggle or (now - last_sysex_time) > 0.08:
                     scaled_val = int(round((val / 127.0) * max_val))
                     final_val = val_list[scaled_val] if val_list else scaled_val
                     
-                    param_states[(active_track, active_partial, msg.control)] = final_val
+                    # FIX: Store using the entire lookup_key tuple, and respect track-level scope
+                    eff_partial = 'track' if is_track_level else active_partial
+                    param_states[(active_track, eff_partial, lookup_key)] = final_val
                     
                     for off in offsets:
-                        send_sysex(out_port, get_mc101_address(active_track, active_partial, off), final_val, size)
+                        eff_partial_sys = 1 if is_track_level else active_partial
+                        send_sysex(out_port, get_mc101_address(active_track, eff_partial_sys, off), final_val, size)
                     
                     if lbl in ["BNK", "WNO"]:
                         send_sysex(out_port, get_mc101_address(active_track, active_partial, 0x1B), 0, 1)
@@ -410,44 +537,22 @@ def main():
             
             else: # Standard CC / Note Mapping Engine
                 lbl = get_mapping_label(m)
-                is_toggle = ("toggle" in m[3:]) if len(m) > 3 else False
                 
-                if is_toggle:
-                    if not is_press: return # Completely ignore physical button release
-                    
-                    state_key = (active_preset, active_scene, lookup_key)
-                    new_state = not toggle_states.get(state_key, False)
-                    toggle_states[state_key] = new_state
-                    
-                    # BUG FIX: Reverted to true state output 127/0 instead of rapid pulse trigger
-                    if out_type == "note":
-                        out_port.send(mido.Message('note_on' if new_state else 'note_off', channel=m[1], note=m[2], velocity=127 if new_state else 0))
-                    elif out_type == "cc":
-                        out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=127 if new_state else 0))
-                    
-                    if preset_info.get("display_values", True):
-                        last_edited_label, last_edited_val, last_edited_text = lbl, None, "ON" if new_state else "OFF"
+                if out_type == "note":
+                    out_port.send(mido.Message('note_on' if val > 0 else 'note_off', channel=m[1], note=m[2], velocity=val))
+                elif out_type == "cc":
+                    out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=val))
+                
+                if preset_info.get("display_values", True):
+                    if msg.type == 'control_change' or is_press or is_toggle:
+                        if out_type == "cc":
+                            last_edited_label, last_edited_val, last_edited_text = lbl, val, None
+                        else:
+                            last_edited_label, last_edited_val, last_edited_text = lbl, None, "ON" if val > 0 else "OFF"
                         update_overlay()
-                    else:
+                else:
+                    if msg.type == 'control_change' or is_press or is_toggle: 
                         clear_overlay()
-                        
-                else: # Momentary / Standard Pass-through
-                    if out_type == "cc":
-                        out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=val))
-                    elif out_type == "note":
-                        out_port.send(mido.Message('note_on' if val > 0 else 'note_off', channel=m[1], note=m[2], velocity=val))
-                    
-                    if preset_info.get("display_values", True):
-                        if msg.type == 'control_change' or is_press:
-                            # BUG FIX: Enforced strict separation so CCs output 0-127 and Notes output ON/OFF
-                            if out_type == "cc":
-                                last_edited_label, last_edited_val, last_edited_text = lbl, val, None
-                            else:
-                                last_edited_label, last_edited_val, last_edited_text = lbl, None, "ON" if is_press else "OFF"
-                            update_overlay()
-                    else:
-                        if msg.type == 'control_change' or is_press: 
-                            clear_overlay()
 
     in_port.callback = midi_callback
     try:
