@@ -116,6 +116,11 @@ CRS_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(16, 113)}
 FIN_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(14, 115)}
 PAN_LABELS = {i: f"R{i-64}" if i > 64 else (f"L{64-i}" if i < 64 else "C") for i in range(128)}
 ST1_LABELS = {0: "OFF", 1: "SNC", 2: "RNG", 3: "XMD", 4: "XM2"}
+TVF_TYP_LABELS = {0: "OFF", 1: "LPF", 2: "BPF", 3: "HPF", 4: "PKG", 5: "LP2", 6: "LP3"}
+ENV_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
+FILTER_TYPE_LABELS = {0: "TVF", 1: "VCF"}
+SLP_LABELS = {0: "-12dB/Oct", 1: "-18dB/Oct", 2: "-24dB/Oct"}
+KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
 
 PRESETS = {
     PRESET_1: {
@@ -277,6 +282,22 @@ PRESETS = {
             2: {
                 "name": "FIL & ENV",
                 "mappings": {
+                    # --- SCENE 2 CC MAPPINGS ---
+                    ("cc", 18): ("sysex", 0x2031, 6, "TYP", 1, TVF_TYP_LABELS),
+                    ("cc", 19): ("sysex", 0x2032, 1023, "CUT", 4),
+                    ("cc", 20): ("sysex", 0x203D, 1023, "RES", 4),
+                    ("cc", 21): ("sysex", 0x2800, 126, "ENV", 1, list(range(1, 128)), ENV_LABELS),
+                    
+                    ("cc", 22): ("sysex", 0x3E0E, 1, "FLT", 1, FILTER_TYPE_LABELS),
+                    ("cc", 23): ("sysex", 0x2036, 400, "KF ", 4, list(range(824, 1225)), KF_LABELS),
+                    ("cc", 24): ("sysex", 0x3E0F, 2, "SLP", 1, SLP_LABELS),
+                    
+                    # HPF Cutoff only activates when CC 22 is set to 1 (VCF)
+                    ("cc", 25): ("conditional_sysex", ("cc", 22), {
+                        0: (None, 0, "---", 1),
+                        1: (0x3E0A, 1023, "HPF", 4)
+                    }),
+
                     # --- TRACK SELECTORS ---
                     ("note", 18): ("track_select", 1, "T01"),
                     ("note", 19): ("track_select", 2, "T02"),
@@ -288,6 +309,9 @@ PRESETS = {
                     ("note", 28): ("partial_select", 2, "P02"),
                     ("note", 29): ("partial_select", 3, "P03"),
                     ("note", 30): ("partial_select", 4, "P04"),
+
+                    # --- TONE SWITCH COMMON (Base 0x1000) ---
+                    ("note", 31): ("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"),
                 }
             }
         }
