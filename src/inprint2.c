@@ -36,6 +36,7 @@ void inline_font_initialize(const struct inline_font *font) {
   SDL_SetSurfaceColorKey(surface, true, SDL_MapSurfaceRGB(surface, 0, 0, 0));
 
   inline_font = SDL_CreateTextureFromSurface(selected_renderer, surface);
+  SDL_SetTextureScaleMode(inline_font, SDL_SCALEMODE_NEAREST);
 
   SDL_DestroySurface(surface);
 

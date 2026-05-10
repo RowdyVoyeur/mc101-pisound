@@ -17,7 +17,6 @@ active_scene = 1
 active_track = 1
 active_partial = 1
 active_pad = 1
-active_wave = 1
 active_pad_bank = 0
 
 last_edited_label = None
@@ -44,7 +43,6 @@ ENV_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
 FILTER_TYPE_LABELS = {0: "TVF", 1: "VCF"}
 SLP_LABELS = {0: "-12", 1: "-18", 2: "-24"}
 KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
-WAVE_TYPE_LABELS = {0: "INT", 1: "EXP", 2: "SMP"}
 
 PAD_NOTES = [37, 39, 42, 46, 49, 51, 54, 56, 36, 38, 41, 45, 48, 62, 63, 64]
 
@@ -94,13 +92,6 @@ PRESETS = {
                     ("note", 8): ("drum_pad_select", 4),
                     ("note", 16): ("drum_pad_bank", -1, "B-1"),
                     ("note", 17): ("drum_pad_bank", 1, "B+1"),
-                    ("note", 9):  ("drum_wave_select", 1, "W1"),
-                    ("note", 10): ("drum_wave_select", 2, "W2"),
-                    ("note", 11): ("drum_wave_select", 3, "W3"),
-                    ("note", 12): ("drum_wave_select", 4, "W4"),
-                    ("note", 13): ("drum_sysex_inst", {1: 0x001D, 2: 0x0040, 3: 0x0063, 4: 0x0106}, 1, "WSW", 1, {0: "OFF", 1: "ON"}, "toggle"),
-                    ("cc", 0): ("drum_sysex_inst", {1: 0x001E, 2: 0x0041, 3: 0x0064, 4: 0x0107}, 2, "WTY", 1, WAVE_TYPE_LABELS),
-                    ("cc", 1): ("drum_sysex_inst", {1: 0x001F, 2: 0x0042, 3: 0x0065, 4: 0x0108}, 16383, "WID", 4),
                     ("cc", 5): ("drum_sysex_partial", 0x0009, 127, "LEV", 1),
                     ("cc", 6): ("drum_sysex_partial", 0x000A, 127, "PAN", 1, None, PAN_LABELS),
                     ("cc", 7): ("drum_sysex_partial", 0x000B, 127, "CHO", 1),
@@ -286,15 +277,6 @@ def get_drum_partial_address(track, pad, param_offset):
     pad_offset_int = to_7bit_int(0x001600) + (pad_key - 21) * 128
     return add_roland_address(base, to_7bit_hex(pad_offset_int), param_offset)
 
-def get_drum_inst_address(track, pad, param_offset):
-    # Verified Bases used for Inst section as well.
-    drum_bases = {1: 0x32400000, 2: 0x32730000, 3: 0x33260000, 4: 0x33590000}
-    base = drum_bases.get(track, 0x32400000)
-    pad_key = PAD_NOTES[pad - 1]
-    # Spacing for Inst is 0x0200 (256 bytes). Key 21 starts at 0x010000.
-    pad_offset_int = to_7bit_int(0x010000) + (pad_key - 21) * 256
-    return add_roland_address(base, to_7bit_hex(pad_offset_int), param_offset)
-
 def get_mapping_label(m):
     if not m: return "---"
     out_type = m[0]
@@ -309,9 +291,9 @@ def get_mapping_label(m):
             return target[2]
         return "---"
     elif out_type in ["track_select", "partial_select"]: return m[2]
-    elif out_type in ["drum_sysex_partial", "drum_sysex_inst"]: return m[3]
+    elif out_type == "drum_sysex_partial": return m[3]
     elif out_type == "drum_pad_select": return f"PD{(active_pad_bank * 4 + m[1]):02d}"
-    elif out_type in ["drum_pad_bank", "drum_wave_select"]: return m[2]
+    elif out_type == "drum_pad_bank": return m[2]
     for item in m[3:]:
         if isinstance(item, str) and item != "toggle": return item
     return "---"
@@ -338,7 +320,7 @@ def update_overlay():
         pa_str = f"P{active_partial:02d}"
         l1 = f"{p_name} > {s_name} > {tr_str} > {pa_str} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} > {tr_str} > {pa_str}"
     elif active_preset == PRESET_5:
-        l1 = f"{p_name} > {s_name} > {tr_str} > PD{active_pad:02d} > W{active_wave} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} > {tr_str} > PD{active_pad:02d} > W{active_wave}"
+        l1 = f"{p_name} > {s_name} > {tr_str} > PD{active_pad:02d} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} > {tr_str} > PD{active_pad:02d}"
     else:
         l1 = f"{p_name} > {s_name} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} "
     
@@ -358,7 +340,7 @@ def update_overlay():
         except: pass
 
 def main():
-    global active_preset, active_scene, active_track, active_partial, active_pad, active_wave, active_pad_bank
+    global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
     global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time
     try:
         in_port = mido.open_input('In', virtual=True, client_name='nanoRouterIN')
@@ -367,7 +349,7 @@ def main():
     update_overlay()
 
     def midi_callback(msg):
-        global active_preset, active_scene, active_track, active_partial, active_pad, active_wave, active_pad_bank
+        global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
         global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time
         if msg.type == 'sysex' and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
             active_scene = msg.data[8] + 1; update_overlay(); return
@@ -392,7 +374,7 @@ def main():
             if is_toggle := ("toggle" in m):
                 if not is_press: return
                 if out_type == "dynamic_sysex_track": s_key = (active_preset, active_scene, lookup_key, active_partial)
-                elif out_type in ["drum_sysex_partial", "drum_sysex_inst"]: s_key = (active_preset, active_scene, lookup_key, active_pad, active_wave)
+                elif out_type == "drum_sysex_partial": s_key = (active_preset, active_scene, lookup_key, active_pad)
                 elif is_track_level: s_key = (active_preset, active_scene, lookup_key, 'track')
                 else: s_key = (active_preset, active_scene, lookup_key, active_partial)
                 new_state = not toggle_states.get(s_key, False)
@@ -413,13 +395,10 @@ def main():
             if out_type == "drum_pad_bank" and is_press:
                 active_pad_bank, last_edited_label, last_edited_val, last_edited_text = (active_pad_bank + m[1]) % 4, m[2], None, None
                 update_overlay() if p_info.get("display_values", True) else clear_overlay(); return
-            if out_type == "drum_wave_select" and is_press:
-                active_wave, last_edited_label, last_edited_val, last_edited_text = m[1], m[2], None, None
-                update_overlay() if p_info.get("display_values", True) else clear_overlay(); return
-            if out_type in ["sysex", "conditional_sysex", "sysex_track", "dynamic_sysex_track", "conditional_sysex_track", "drum_sysex_partial", "drum_sysex_inst"]:
+            if out_type in ["sysex", "conditional_sysex", "sysex_track", "dynamic_sysex_track", "conditional_sysex_track", "drum_sysex_partial"]:
                 if out_type in ["sysex", "sysex_track"]: target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
                 elif out_type == "dynamic_sysex_track": target = (m[1].get(active_partial, 0), m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
-                elif out_type in ["drum_sysex_partial", "drum_sysex_inst"]: target = (m[1].get(active_wave, 0) if isinstance(m[1], dict) else m[1], m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
+                elif out_type == "drum_sysex_partial": target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
                 else:
                     cv = param_states.get((active_track, 'track', m[1]), param_states.get((active_track, active_partial, m[1]), 0))
                     target = m[2].get(cv)
@@ -429,10 +408,9 @@ def main():
                 now = time.time()
                 if is_toggle or (now - last_sysex_time) > 0.08:
                     f_val = v_list[int(round((val/127.0)*max_v))] if v_list else int(round((val/127.0)*max_v))
-                    param_states[(active_track, (f"P{active_pad}_W{active_wave}" if out_type in ["drum_sysex_partial", "drum_sysex_inst"] else ('track' if is_track_level else active_partial)), lookup_key)] = f_val
+                    param_states[(active_track, (f"P{active_pad}" if out_type == "drum_sysex_partial" else ('track' if is_track_level else active_partial)), lookup_key)] = f_val
                     for o in offs:
                         if out_type == "drum_sysex_partial": addr = get_drum_partial_address(active_track, active_pad, o)
-                        elif out_type == "drum_sysex_inst": addr = get_drum_inst_address(active_track, active_pad, o)
                         else: addr = get_mc101_address(active_track, (1 if is_track_level else active_partial), o)
                         send_sysex(out_port, addr, f_val, size)
                     if lbl in ["BNK", "WNO"]: send_sysex(out_port, get_mc101_address(active_track, active_partial, 0x1B), 0, 1)

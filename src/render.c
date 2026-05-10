@@ -233,8 +233,15 @@ static void check_and_adjust_window_and_texture_size(const int new_width, const 
   if (main_texture != NULL) SDL_DestroyTexture(main_texture);
   
   if (overlay_texture != NULL) SDL_DestroyTexture(overlay_texture);
-  overlay_texture = SDL_CreateTexture(rend, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, texture_width, texture_height);
-  SDL_SetTextureBlendMode(overlay_texture, SDL_BLENDMODE_BLEND);
+  overlay_texture = SDL_CreateTexture(
+    rend,
+    SDL_PIXELFORMAT_ARGB8888,
+    SDL_TEXTUREACCESS_TARGET,
+    texture_width,
+    texture_height
+);
+SDL_SetTextureBlendMode(overlay_texture, SDL_BLENDMODE_BLEND);
+SDL_SetTextureScaleMode(overlay_texture, SDL_SCALEMODE_NEAREST);
 
   log_overlay_invalidate();
 
@@ -445,8 +452,15 @@ int renderer_initialize(config_params_s *conf) {
   renderer_set_font_mode(0);
 
   // --- Overlay Init ---
-  overlay_texture = SDL_CreateTexture(rend, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, texture_width, texture_height);
-  SDL_SetTextureBlendMode(overlay_texture, SDL_BLENDMODE_BLEND);
+overlay_texture = SDL_CreateTexture(
+    rend,
+    SDL_PIXELFORMAT_ARGB8888,
+    SDL_TEXTUREACCESS_TARGET,
+    texture_width,
+    texture_height
+);
+SDL_SetTextureBlendMode(overlay_texture, SDL_BLENDMODE_BLEND);
+SDL_SetTextureScaleMode(overlay_texture, SDL_SCALEMODE_NEAREST);
 
   mkfifo(OVERLAY_PIPE, 0666);
   hud.pipe_fd = open(OVERLAY_PIPE, O_RDWR | O_NONBLOCK);
