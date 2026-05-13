@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 
 #define OVERLAY_PIPE "/tmp/m8c_overlay"
 #define OVERLAY_DURATION 5000 
@@ -31,14 +32,54 @@ typedef struct {
     uint64_t hide_at;
     bool active;
     int pipe_fd;
+    char pipe_buffer[1024];
+    size_t pipe_buffer_len;
 } OverlayHUD;
 
 static OverlayHUD hud = {0};
 
-static SDL_Texture *overlay_texture = NULL; 
+static SDL_Texture *overlay_texture = NULL;
 
-// Storage for our sniffed theme colors
-static SDL_Color global_foreground_color = {0xFF, 0xFF, 0xFF, 255}; 
+#define HUD_THEME_MAX_SAMPLES 32
+#define HUD_HIGHLIGHT_MARKER ">X<"
+#define HUD_OVERLAY_BG_HEIGHT 48.0f
+#define HUD_LINE_1_X 8
+#define HUD_LINE_1_Y 4
+#define HUD_LINE_2_X 8
+#define HUD_LINE_2_Y 22
+#define HUD_LINE_3_X 8
+#define HUD_LINE_3_Y 36
+
+typedef struct {
+    SDL_Color color;
+    int weight;
+} HUDThemeSample;
+
+typedef struct {
+    SDL_Color background;
+    SDL_Color main;
+    SDL_Color highlight;
+    bool background_ready;
+    bool main_ready;
+    bool highlight_ready;
+    bool highlight_locked;
+} HUDTheme;
+
+static HUDTheme hud_theme = {
+    .background = {0x00, 0x00, 0x00, 255},
+    .main = {0xFF, 0xFF, 0xFF, 255},
+    .highlight = {0xFF, 0xFF, 0xFF, 255},
+    .background_ready = false,
+    .main_ready = false,
+    .highlight_ready = false,
+    .highlight_locked = false,
+};
+
+static HUDThemeSample hud_main_samples[HUD_THEME_MAX_SAMPLES] = {0};
+static HUDThemeSample hud_highlight_samples[HUD_THEME_MAX_SAMPLES] = {0};
+
+// Kept for existing renderer paths that still need a simple current colour.
+static SDL_Color global_foreground_color = {0xFF, 0xFF, 0xFF, 255};
 static SDL_Color global_background_color = {0x00, 0x00, 0x00, 255};
 // --- End of Overlay Globals ---
 
@@ -69,38 +110,353 @@ uint8_t fullscreen = 0;
 static uint8_t dirty = 0;
 
 // --- Start of Overlay Functions ---
-void update_overlay_data(void) {
-    char buffer[512];
-    ssize_t bytes = read(hud.pipe_fd, buffer, sizeof(buffer) - 1);
-    
-    if (bytes > 0) {
-        buffer[bytes] = '\0';
-        for (int j = 0; j < 3; j++) {
-            hud.lines[j][0] = '\0';
+static SDL_Color hud_make_color(uint8_t r, uint8_t g, uint8_t b) {
+    return (SDL_Color){r, g, b, 255};
+}
+
+static Uint32 hud_color_to_hex(SDL_Color color) {
+    return 0xFF000000 | ((Uint32)color.r << 16) | ((Uint32)color.g << 8) | color.b;
+}
+
+static bool hud_same_color(SDL_Color a, SDL_Color b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+static SDL_Color hud_normalize_main_color(SDL_Color color) {
+    uint8_t max = color.r;
+    if (color.g > max) max = color.g;
+    if (color.b > max) max = color.b;
+
+    uint8_t min = color.r;
+    if (color.g < min) min = color.g;
+    if (color.b < min) min = color.b;
+
+    if (max == 0) return color;
+
+    /*
+     * The M8 often sends the main foreground as a dimmed neutral colour.
+     * For HUD use, treat low-saturation dim text as the bright theme foreground.
+     * This keeps the default theme white instead of sampling grey like #889088.
+     */
+    if ((uint8_t)(max - min) <= 16) {
+        return hud_make_color(0xFF, 0xFF, 0xFF);
+    }
+
+    return hud_make_color((uint8_t)((color.r * 255) / max),
+                          (uint8_t)((color.g * 255) / max),
+                          (uint8_t)((color.b * 255) / max));
+}
+
+static bool hud_rgb_is_color(uint8_t r, uint8_t g, uint8_t b, SDL_Color color) {
+    return r == color.r && g == color.g && b == color.b;
+}
+
+static bool hud_theme_debug_enabled(void) {
+    static int enabled = -1;
+    if (enabled == -1) {
+        enabled = getenv("M8C_HUD_THEME_DEBUG") != NULL ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+static void hud_reset_theme_samples(void) {
+    memset(hud_main_samples, 0, sizeof(hud_main_samples));
+    memset(hud_highlight_samples, 0, sizeof(hud_highlight_samples));
+}
+
+static void hud_add_theme_sample(HUDThemeSample samples[HUD_THEME_MAX_SAMPLES], SDL_Color color,
+                                 int weight) {
+    if (weight <= 0) return;
+
+    for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (samples[i].weight > 0 && hud_same_color(samples[i].color, color)) {
+            samples[i].weight += weight;
+            return;
+        }
+    }
+
+    for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (samples[i].weight == 0) {
+            samples[i].color = color;
+            samples[i].weight = weight;
+            return;
+        }
+    }
+
+    int weakest = 0;
+    for (int i = 1; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (samples[i].weight < samples[weakest].weight) weakest = i;
+    }
+
+    if (weight > samples[weakest].weight) {
+        samples[weakest].color = color;
+        samples[weakest].weight = weight;
+    }
+}
+
+static int hud_color_chroma(SDL_Color color) {
+    uint8_t max = color.r;
+    if (color.g > max) max = color.g;
+    if (color.b > max) max = color.b;
+
+    uint8_t min = color.r;
+    if (color.g < min) min = color.g;
+    if (color.b < min) min = color.b;
+
+    return max - min;
+}
+
+static bool hud_is_neutral_color(SDL_Color color) {
+    return hud_color_chroma(color) <= 24;
+}
+
+static SDL_Color hud_best_theme_sample(HUDThemeSample samples[HUD_THEME_MAX_SAMPLES], int *weight) {
+    int best = -1;
+    for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (samples[i].weight <= 0) continue;
+        if (best < 0 || samples[i].weight > samples[best].weight) best = i;
+    }
+
+    if (best < 0) {
+        *weight = 0;
+        return hud_make_color(0, 0, 0);
+    }
+
+    *weight = samples[best].weight;
+    return samples[best].color;
+}
+
+static SDL_Color hud_best_highlight_sample(HUDThemeSample samples[HUD_THEME_MAX_SAMPLES],
+                                           int *weight) {
+    int best = -1;
+
+    /*
+     * Highlight should be the theme accent colour, not neutral text backgrounds.
+     * In the default theme the neutral selected-text background can appear as
+     * #D8E0D8, while the actual highlight/accent appears as orange. Prefer
+     * chromatic candidates when they exist, then fall back to the strongest
+     * neutral candidate for monochrome themes.
+     */
+    for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (samples[i].weight <= 0) continue;
+        if (hud_is_neutral_color(samples[i].color)) continue;
+        if (best < 0 || samples[i].weight > samples[best].weight) best = i;
+    }
+
+    if (best < 0) {
+        return hud_best_theme_sample(samples, weight);
+    }
+
+    *weight = samples[best].weight;
+    return samples[best].color;
+}
+
+static void hud_update_theme_from_samples(void) {
+    int main_weight = 0;
+    SDL_Color main = hud_best_theme_sample(hud_main_samples, &main_weight);
+    if (main_weight >= 5 && !hud_same_color(hud_theme.main, main)) {
+        hud_theme.main = main;
+        hud_theme.main_ready = true;
+        global_foreground_color = main;
+        dirty = 1;
+    } else if (main_weight >= 5) {
+        hud_theme.main_ready = true;
+        global_foreground_color = hud_theme.main;
+    }
+
+    if (!hud_theme.highlight_locked) {
+        int highlight_weight = 0;
+        SDL_Color highlight = hud_best_highlight_sample(hud_highlight_samples, &highlight_weight);
+        if (highlight_weight >= 5) {
+            const bool changed = !hud_same_color(hud_theme.highlight, highlight);
+            hud_theme.highlight = highlight;
+            hud_theme.highlight_ready = true;
+
+            /*
+             * Lock the first stable accent colour until the theme/background changes.
+             * This prevents transient state colours, such as a green PLAY indicator,
+             * from replacing the actual theme highlight while the M8 is running.
+             */
+            if (!hud_is_neutral_color(highlight)) {
+                hud_theme.highlight_locked = true;
+            }
+
+            if (changed) dirty = 1;
+        }
+    }
+}
+
+static void hud_log_theme_samples(const char *label,
+                                  HUDThemeSample samples[HUD_THEME_MAX_SAMPLES]) {
+    int used[3] = {-1, -1, -1};
+
+    for (int rank = 0; rank < 3; rank++) {
+        int best = -1;
+        for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+            if (samples[i].weight <= 0) continue;
+            if (i == used[0] || i == used[1] || i == used[2]) continue;
+            if (best < 0 || samples[i].weight > samples[best].weight) best = i;
         }
 
-        char *token = strtok(buffer, "~");
-        int i = 0;
-        while (token != NULL && i < 3) {
-            token[strcspn(token, "\r\n")] = 0; 
-            for (int k = 0; token[k] != '\0'; k++) {
-                token[k] = toupper((unsigned char)token[k]);
-            }
-            strncpy(hud.lines[i], token, 127);
-            token = strtok(NULL, "~");
+        if (best < 0) return;
+        used[rank] = best;
+        SDL_Log("HUD THEME %s #%d #%02X%02X%02X weight=%d", label, rank + 1,
+                samples[best].color.r, samples[best].color.g, samples[best].color.b,
+                samples[best].weight);
+    }
+}
+
+static void hud_debug_log_theme(void) {
+    static Uint64 last_log = 0;
+    const Uint64 now = SDL_GetTicks();
+
+    if (!hud_theme_debug_enabled() || now - last_log < 1000) return;
+    last_log = now;
+
+    SDL_Log("HUD THEME selected background=#%02X%02X%02X main=#%02X%02X%02X highlight=#%02X%02X%02X",
+            hud_theme.background.r, hud_theme.background.g, hud_theme.background.b,
+            hud_theme.main.r, hud_theme.main.g, hud_theme.main.b,
+            hud_theme.highlight.r, hud_theme.highlight.g, hud_theme.highlight.b);
+    hud_log_theme_samples("main", hud_main_samples);
+    hud_log_theme_samples("highlight", hud_highlight_samples);
+}
+
+static void hud_set_background_theme_color(SDL_Color color) {
+    if (!hud_theme.background_ready || !hud_same_color(hud_theme.background, color)) {
+        hud_theme.background = color;
+        hud_theme.background_ready = true;
+        global_background_color = color;
+
+        hud_theme.main_ready = false;
+        hud_theme.highlight_ready = false;
+        hud_theme.highlight_locked = false;
+        hud_reset_theme_samples();
+        dirty = 1;
+        return;
+    }
+
+    global_background_color = color;
+}
+
+static void hud_sample_main_theme_color(SDL_Color color) {
+    if (!hud_theme.background_ready || hud_same_color(color, hud_theme.background)) return;
+    hud_add_theme_sample(hud_main_samples, hud_normalize_main_color(color), 1);
+    hud_update_theme_from_samples();
+}
+
+static void hud_sample_highlight_theme_color(SDL_Color color, int weight) {
+    if (!hud_theme.background_ready || hud_same_color(color, hud_theme.background)) return;
+    hud_add_theme_sample(hud_highlight_samples, color, weight);
+    hud_update_theme_from_samples();
+}
+
+static void hud_draw_text_run(SDL_Renderer *renderer, const char *text, int x, int y,
+                              int glyph_step, Uint32 fg_hex, Uint32 bg_hex) {
+    char c[2] = {0, 0};
+    for (int i = 0; text[i] != '\0'; i++) {
+        c[0] = text[i];
+        inprint(renderer, c, x, y, fg_hex, bg_hex);
+        x += glyph_step;
+    }
+}
+
+static void hud_draw_line(SDL_Renderer *renderer, const char *text, int x, int y,
+                          const struct inline_font *font, Uint32 main_hex, Uint32 highlight_hex,
+                          Uint32 bg_hex) {
+    const int glyph_step = font->glyph_x + 1;
+    const size_t marker_len = strlen(HUD_HIGHLIGHT_MARKER);
+
+    for (int i = 0; text[i] != '\0';) {
+        if (marker_len > 0 && strncmp(&text[i], HUD_HIGHLIGHT_MARKER, marker_len) == 0) {
+            hud_draw_text_run(renderer, HUD_HIGHLIGHT_MARKER, x, y, glyph_step, highlight_hex, bg_hex);
+            x += (int)marker_len * glyph_step;
+            i += (int)marker_len;
+        } else {
+            char c[2] = {text[i], '\0'};
+            inprint(renderer, c, x, y, main_hex, bg_hex);
+            x += glyph_step;
             i++;
         }
-        
-        hud.hide_at = SDL_GetTicks() + OVERLAY_DURATION;
-        hud.active = true;
-        dirty = 1; 
+    }
+}
+
+static void hud_apply_overlay_message(char *message) {
+    message[strcspn(message, "\r\n")] = '\0';
+
+    for (int j = 0; j < 3; j++) {
+        hud.lines[j][0] = '\0';
+    }
+
+    char *token = strtok(message, "~");
+    int i = 0;
+    while (token != NULL && i < 3) {
+        for (int k = 0; token[k] != '\0'; k++) {
+            token[k] = toupper((unsigned char)token[k]);
+        }
+        strncpy(hud.lines[i], token, sizeof(hud.lines[i]) - 1);
+        hud.lines[i][sizeof(hud.lines[i]) - 1] = '\0';
+        token = strtok(NULL, "~");
+        i++;
+    }
+
+    hud.hide_at = SDL_GetTicks() + OVERLAY_DURATION;
+    hud.active = true;
+    dirty = 1;
+}
+
+void update_overlay_data(void) {
+    char buffer[512];
+    char latest_message[512] = {0};
+    bool have_complete_message = false;
+
+    for (;;) {
+        ssize_t bytes = read(hud.pipe_fd, buffer, sizeof(buffer));
+        if (bytes <= 0) {
+            if (bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                hud.pipe_buffer_len = 0;
+            }
+            break;
+        }
+
+        if (hud.pipe_buffer_len + (size_t)bytes >= sizeof(hud.pipe_buffer)) {
+            /*
+             * Drop an incomplete backlog rather than rendering mixed fragments.
+             * The overlay writer sends newline-terminated messages, so the next
+             * complete message will repopulate the HUD immediately.
+             */
+            hud.pipe_buffer_len = 0;
+        }
+
+        memcpy(hud.pipe_buffer + hud.pipe_buffer_len, buffer, (size_t)bytes);
+        hud.pipe_buffer_len += (size_t)bytes;
+
+        for (;;) {
+            char *newline = memchr(hud.pipe_buffer, '\n', hud.pipe_buffer_len);
+            if (newline == NULL) break;
+
+            size_t message_len = (size_t)(newline - hud.pipe_buffer);
+            if (message_len >= sizeof(latest_message)) {
+                message_len = sizeof(latest_message) - 1;
+            }
+            memcpy(latest_message, hud.pipe_buffer, message_len);
+            latest_message[message_len] = '\0';
+            have_complete_message = true;
+
+            size_t consumed = (size_t)(newline - hud.pipe_buffer) + 1;
+            memmove(hud.pipe_buffer, hud.pipe_buffer + consumed, hud.pipe_buffer_len - consumed);
+            hud.pipe_buffer_len -= consumed;
+        }
+    }
+
+    if (have_complete_message) {
+        hud_apply_overlay_message(latest_message);
     }
 }
 
 static void draw_overlay(SDL_Renderer *renderer) {
     if (hud.active && SDL_GetTicks() > hud.hide_at) {
         hud.active = false;
-        dirty = 1; 
+        dirty = 1;
         return;
     }
 
@@ -112,23 +468,29 @@ static void draw_overlay(SDL_Renderer *renderer) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderClear(renderer);
 
-    // Box height fits all lines
-    SDL_FRect bg = {0.0f, 0.0f, (float)texture_width, 48.0f}; 
-    SDL_SetRenderDrawColor(renderer, global_background_color.r, global_background_color.g, global_background_color.b, 255);
+    const int active_font_mode = font_mode >= 0 ? font_mode : 0;
+    const struct inline_font *font = fonts_get(active_font_mode);
+
+    const SDL_Color bg_color = hud_theme.background_ready ? hud_theme.background : global_background_color;
+    const SDL_Color main_color = hud_theme.main_ready ? hud_theme.main : global_foreground_color;
+    const SDL_Color highlight_color = hud_theme.highlight_ready ? hud_theme.highlight : main_color;
+
+    SDL_FRect bg = {0.0f, 0.0f, (float)texture_width, HUD_OVERLAY_BG_HEIGHT};
+    SDL_SetRenderDrawColor(renderer, bg_color.r, bg_color.g, bg_color.b, 255);
     SDL_RenderFillRect(renderer, &bg);
 
-    // Forces Alpha to 0xFF to prevent darker colors during texture blending
-    uint32_t bg_hex = 0xFF000000 | (global_background_color.r << 16) | (global_background_color.g << 8) | global_background_color.b;
-    uint32_t fg_hex = 0xFF000000 | (global_foreground_color.r << 16) | (global_foreground_color.g << 8) | global_foreground_color.b;
+    const Uint32 bg_hex = hud_color_to_hex(bg_color);
+    const Uint32 main_hex = hud_color_to_hex(main_color);
+    const Uint32 highlight_hex = hud_color_to_hex(highlight_color);
 
     if (strlen(hud.lines[0]) > 0) {
-        inprint(renderer, hud.lines[0], 8, 4, fg_hex, bg_hex);
+        hud_draw_line(renderer, hud.lines[0], HUD_LINE_1_X, HUD_LINE_1_Y, font, main_hex, highlight_hex, bg_hex);
     }
     if (strlen(hud.lines[1]) > 0) {
-        inprint(renderer, hud.lines[1], 8, 22, fg_hex, bg_hex);
+        hud_draw_line(renderer, hud.lines[1], HUD_LINE_2_X, HUD_LINE_2_Y, font, main_hex, highlight_hex, bg_hex);
     }
     if (strlen(hud.lines[2]) > 0) {
-        inprint(renderer, hud.lines[2], 8, 36, fg_hex, bg_hex);
+        hud_draw_line(renderer, hud.lines[2], HUD_LINE_3_X, HUD_LINE_3_Y, font, main_hex, highlight_hex, bg_hex);
     }
 
     SDL_SetRenderTarget(renderer, old_target);
@@ -309,22 +671,19 @@ int draw_character(struct draw_character_command *command) {
   const uint32_t bgcolor =
       command->background.r << 16 | command->background.g << 8 | command->background.b;
 
-  // --- Normalizing Color Picker ---
-  if (command->pos.x == 272 && command->pos.y == 40) {
-      // We grab the color, but boost it to 100% luminosity to counteract M8's internal dimming
-      float r = command->foreground.r;
-      float g = command->foreground.g;
-      float b = command->foreground.b;
-      float max_val = SDL_max(r, SDL_max(g, b));
-      
-      if (max_val > 0) {
-          float multiplier = 255.0f / max_val;
-          global_foreground_color.r = (uint8_t)(r * multiplier);
-          global_foreground_color.g = (uint8_t)(g * multiplier);
-          global_foreground_color.b = (uint8_t)(b * multiplier);
-      }
+  if (hud_theme.background_ready && command->c != ' ') {
+    if (hud_rgb_is_color(command->background.r, command->background.g, command->background.b,
+                         hud_theme.background)) {
+      hud_sample_main_theme_color(hud_make_color(command->foreground.r, command->foreground.g,
+                                                 command->foreground.b));
+    } else {
+      hud_sample_highlight_theme_color(hud_make_color(command->background.r, command->background.g,
+                                                      command->background.b),
+                                       2);
+    }
   }
-  // --------------------------------
+
+  hud_debug_log_theme();
 
   inprint(rend, (char *)&command->c, command->pos.x,
           command->pos.y + text_offset_y + screen_offset_y, fgcolor, bgcolor);
@@ -341,11 +700,25 @@ void draw_rectangle(struct draw_rectangle_command *command) {
 
   if (render_rect.x == 0 && render_rect.y <= 0 && render_rect.w == (float)texture_width &&
       render_rect.h >= (float)texture_height) {
-    global_background_color.r = command->color.r;
-    global_background_color.g = command->color.g;
-    global_background_color.b = command->color.b;
-    global_background_color.a = 255;
+    hud_set_background_theme_color(hud_make_color(command->color.r, command->color.g,
+                                                  command->color.b));
+  } else if (hud_theme.background_ready &&
+             !hud_rgb_is_color(command->color.r, command->color.g, command->color.b,
+                               hud_theme.background)) {
+    const int screen_area = texture_width * texture_height;
+    const int rect_area = (int)(render_rect.w * render_rect.h);
+
+    if (rect_area > 0 && rect_area < screen_area / 2) {
+      int weight = rect_area / 32;
+      if (weight < 1) weight = 1;
+      if (weight > 64) weight = 64;
+      hud_sample_highlight_theme_color(hud_make_color(command->color.r, command->color.g,
+                                                      command->color.b),
+                                       weight);
+    }
   }
+
+  hud_debug_log_theme();
 
   SDL_SetRenderDrawColor(rend, command->color.r, command->color.g, command->color.b, 255);
   SDL_RenderFillRect(rend, &render_rect);
