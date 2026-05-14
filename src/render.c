@@ -49,6 +49,7 @@ static SDL_Texture *overlay_texture = NULL;
 #define HUD_LINE_2_Y 22
 #define HUD_LINE_3_X 8
 #define HUD_LINE_3_Y 36
+#define HUD_THEME_FREEZE_DELAY_MS 1200
 
 typedef struct {
     SDL_Color color;
@@ -63,6 +64,11 @@ typedef struct {
     bool main_ready;
     bool highlight_ready;
     bool highlight_locked;
+    bool main_probe_locked;
+    bool highlight_probe_locked;
+    bool theme_frozen;
+    bool full_redraw_seen;
+    Uint64 redraw_started_at;
 } HUDTheme;
 
 static HUDTheme hud_theme = {
@@ -73,10 +79,17 @@ static HUDTheme hud_theme = {
     .main_ready = false,
     .highlight_ready = false,
     .highlight_locked = false,
+    .main_probe_locked = false,
+    .highlight_probe_locked = false,
+    .theme_frozen = false,
+    .full_redraw_seen = false,
+    .redraw_started_at = 0,
 };
 
 static HUDThemeSample hud_main_samples[HUD_THEME_MAX_SAMPLES] = {0};
+static HUDThemeSample hud_main_probe_samples[HUD_THEME_MAX_SAMPLES] = {0};
 static HUDThemeSample hud_highlight_samples[HUD_THEME_MAX_SAMPLES] = {0};
+static HUDThemeSample hud_highlight_probe_samples[HUD_THEME_MAX_SAMPLES] = {0};
 
 // Kept for existing renderer paths that still need a simple current colour.
 static SDL_Color global_foreground_color = {0xFF, 0xFF, 0xFF, 255};
@@ -122,6 +135,10 @@ static bool hud_same_color(SDL_Color a, SDL_Color b) {
     return a.r == b.r && a.g == b.g && a.b == b.b;
 }
 
+static int hud_luma(SDL_Color color) {
+    return ((int)color.r * 299 + (int)color.g * 587 + (int)color.b * 114) / 1000;
+}
+
 static SDL_Color hud_normalize_main_color(SDL_Color color) {
     uint8_t max = color.r;
     if (color.g > max) max = color.g;
@@ -134,12 +151,15 @@ static SDL_Color hud_normalize_main_color(SDL_Color color) {
     if (max == 0) return color;
 
     /*
-     * The M8 often sends the main foreground as a dimmed neutral colour.
-     * For HUD use, treat low-saturation dim text as the bright theme foreground.
-     * This keeps the default theme white instead of sampling grey like #889088.
+     * On dark themes the M8 often sends the main foreground as a dimmed neutral
+     * colour. For HUD use, lift that to the bright foreground. On light themes,
+     * however, the main foreground is intentionally grey, so keep it as-is.
      */
     if ((uint8_t)(max - min) <= 16) {
-        return hud_make_color(0xFF, 0xFF, 0xFF);
+        if (!hud_theme.background_ready || hud_luma(hud_theme.background) < 128) {
+            return hud_make_color(0xFF, 0xFF, 0xFF);
+        }
+        return color;
     }
 
     return hud_make_color((uint8_t)((color.r * 255) / max),
@@ -149,6 +169,52 @@ static SDL_Color hud_normalize_main_color(SDL_Color color) {
 
 static bool hud_rgb_is_color(uint8_t r, uint8_t g, uint8_t b, SDL_Color color) {
     return r == color.r && g == color.g && b == color.b;
+}
+
+static bool hud_rgb_is_not_background(uint8_t r, uint8_t g, uint8_t b) {
+    return !hud_rgb_is_color(r, g, b, hud_theme.background);
+}
+
+static int hud_scale_x(int x) {
+    return (x * texture_width) / 320;
+}
+
+static int hud_scale_y(int y) {
+    return (y * texture_height) / 240;
+}
+
+static bool hud_pos_in_scaled_box(int x, int y, int min_x, int max_x, int min_y, int max_y) {
+    return x >= hud_scale_x(min_x) && x <= hud_scale_x(max_x) &&
+           y >= hud_scale_y(min_y) && y <= hud_scale_y(max_y);
+}
+
+static bool hud_is_song_main_probe_position(int x, int y) {
+    /*
+     * Stable main-colour foregrounds on the SONG screen:
+     * - tempo area around T>128
+     * - non-selected row labels
+     * - non-selected column labels
+     */
+    return hud_pos_in_scaled_box(x, y, 262, 319, 48, 72) ||
+           hud_pos_in_scaled_box(x, y, 0, 50, 76, 208) ||
+           hud_pos_in_scaled_box(x, y, 96, 255, 50, 72);
+}
+
+static bool hud_is_song_highlight_probe_position(int x, int y) {
+    /*
+     * Cursor/selected row/selected column area on the default SONG screen.
+     * These boxes are scaled from the 320x240 logical layout so they still work
+     * on 480x320 Model:02 rendering.
+     */
+    return hud_pos_in_scaled_box(x, y, 0, 72, 48, 84) ||
+           hud_pos_in_scaled_box(x, y, 50, 92, 42, 78);
+}
+
+static int hud_color_max_channel(SDL_Color color) {
+    uint8_t max = color.r;
+    if (color.g > max) max = color.g;
+    if (color.b > max) max = color.b;
+    return max;
 }
 
 static bool hud_theme_debug_enabled(void) {
@@ -161,7 +227,11 @@ static bool hud_theme_debug_enabled(void) {
 
 static void hud_reset_theme_samples(void) {
     memset(hud_main_samples, 0, sizeof(hud_main_samples));
+    memset(hud_main_probe_samples, 0, sizeof(hud_main_probe_samples));
     memset(hud_highlight_samples, 0, sizeof(hud_highlight_samples));
+    memset(hud_highlight_probe_samples, 0, sizeof(hud_highlight_probe_samples));
+    hud_theme.main_probe_locked = false;
+    hud_theme.highlight_probe_locked = false;
 }
 
 static void hud_add_theme_sample(HUDThemeSample samples[HUD_THEME_MAX_SAMPLES], SDL_Color color,
@@ -251,20 +321,238 @@ static SDL_Color hud_best_highlight_sample(HUDThemeSample samples[HUD_THEME_MAX_
     return samples[best].color;
 }
 
-static void hud_update_theme_from_samples(void) {
-    int main_weight = 0;
-    SDL_Color main = hud_best_theme_sample(hud_main_samples, &main_weight);
-    if (main_weight >= 5 && !hud_same_color(hud_theme.main, main)) {
-        hud_theme.main = main;
-        hud_theme.main_ready = true;
-        global_foreground_color = main;
-        dirty = 1;
-    } else if (main_weight >= 5) {
-        hud_theme.main_ready = true;
-        global_foreground_color = hud_theme.main;
+static SDL_Color hud_best_main_probe_sample(int *weight) {
+    int best = -1;
+    int best_score = -1;
+    const int bg_luma = hud_theme.background_ready ? hud_luma(hud_theme.background) : 0;
+
+    for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (hud_main_probe_samples[i].weight <= 0) continue;
+
+        const SDL_Color color = hud_main_probe_samples[i].color;
+        if (hud_theme.background_ready && hud_same_color(color, hud_theme.background)) continue;
+        if (!hud_is_neutral_color(color)) continue;
+
+        const int luma = hud_luma(color);
+        const int contrast = abs(luma - bg_luma);
+
+        /*
+         * Main probe samples come from known SONG-screen text locations. Pick
+         * the sample with the strongest contrast against the current background,
+         * not the first colour that appears. This lets dark themes pick white
+         * when it exists, while light themes keep their darker grey foreground.
+         */
+        const int score =
+            hud_main_probe_samples[i].weight * 8 +
+            contrast * 4 +
+            (bg_luma < 128 ? luma : (255 - luma));
+
+        if (best < 0 || score > best_score) {
+            best = i;
+            best_score = score;
+        }
     }
 
-    if (!hud_theme.highlight_locked) {
+    if (best < 0) {
+        *weight = 0;
+        return hud_make_color(0, 0, 0);
+    }
+
+    *weight = hud_main_probe_samples[best].weight;
+    return hud_main_probe_samples[best].color;
+}
+
+static SDL_Color hud_best_cursor_probe_sample(int *weight) {
+    int best = -1;
+    int best_score = -1;
+
+    for (int i = 0; i < HUD_THEME_MAX_SAMPLES; i++) {
+        if (hud_highlight_probe_samples[i].weight <= 0) continue;
+
+        const SDL_Color color = hud_highlight_probe_samples[i].color;
+        if (hud_is_neutral_color(color)) continue;
+
+        const int score =
+            hud_color_max_channel(color) * 8 +
+            hud_color_chroma(color) * 4 +
+            hud_luma(color) +
+            hud_highlight_probe_samples[i].weight;
+
+        if (best < 0 || score > best_score) {
+            best = i;
+            best_score = score;
+        }
+    }
+
+    if (best < 0) {
+        *weight = 0;
+        return hud_make_color(0, 0, 0);
+    }
+
+    *weight = hud_highlight_probe_samples[best].weight;
+    return hud_highlight_probe_samples[best].color;
+}
+
+static bool hud_is_cursor_highlight_color(SDL_Color color) {
+    if (!hud_theme.background_ready || hud_same_color(color, hud_theme.background)) return false;
+    if (hud_is_neutral_color(color)) return false;
+
+    /*
+     * Ignore dark shadow/anti-alias variants of the cursor colour. The intended
+     * cursor accent normally has at least one strong channel, while darker
+     * variants such as brown/orange shadows do not.
+     */
+    return hud_color_max_channel(color) >= 150;
+}
+
+static void hud_maybe_freeze_theme(void) {
+    if (hud_theme.theme_frozen) return;
+    if (!hud_theme.full_redraw_seen) return;
+
+    /*
+     * Do not freeze as soon as the first probe hits. During startup/reset the M8
+     * sends a full-screen background first, then the rest of the SONG screen.
+     * Waiting a short, fixed delay after that full redraw avoids locking onto
+     * early/transient colours before the cursor and header have both been drawn.
+     */
+    if (!(hud_theme.background_ready && hud_theme.main_ready && hud_theme.highlight_ready &&
+          hud_theme.main_probe_locked && hud_theme.highlight_probe_locked)) {
+        return;
+    }
+
+    const Uint64 now = SDL_GetTicks();
+    if (now - hud_theme.redraw_started_at < HUD_THEME_FREEZE_DELAY_MS) {
+        dirty = 1;
+        return;
+    }
+
+    {
+        int main_probe_weight = 0;
+        SDL_Color main_probe = hud_best_main_probe_sample(&main_probe_weight);
+        if (main_probe_weight > 0) {
+            hud_theme.main = main_probe;
+            hud_theme.main_ready = true;
+            global_foreground_color = main_probe;
+        }
+
+        hud_theme.theme_frozen = true;
+
+        if (hud_theme_debug_enabled()) {
+            SDL_Log("HUD THEME frozen after stable redraw background=#%02X%02X%02X main=#%02X%02X%02X highlight=#%02X%02X%02X",
+                    hud_theme.background.r, hud_theme.background.g, hud_theme.background.b,
+                    hud_theme.main.r, hud_theme.main.g, hud_theme.main.b,
+                    hud_theme.highlight.r, hud_theme.highlight.g, hud_theme.highlight.b);
+        }
+    }
+}
+
+static void hud_reset_theme_for_display_reset(const char *reason) {
+    hud_theme.background_ready = false;
+    hud_theme.main_ready = false;
+    hud_theme.highlight_ready = false;
+    hud_theme.highlight_locked = false;
+    hud_theme.main_probe_locked = false;
+    hud_theme.highlight_probe_locked = false;
+    hud_theme.theme_frozen = false;
+    hud_theme.full_redraw_seen = false;
+    hud_theme.redraw_started_at = 0;
+    hud_reset_theme_samples();
+
+    if (hud_theme_debug_enabled()) {
+        SDL_Log("HUD THEME reset for resample: %s", reason ? reason : "display reset");
+    }
+}
+
+static void hud_set_main_theme_color_from_probe(SDL_Color color, int x, int y, char c) {
+    if (hud_theme.theme_frozen) return;
+    if (!hud_theme.background_ready || hud_same_color(color, hud_theme.background)) return;
+    if (!hud_is_neutral_color(color)) return;
+
+    /*
+     * Do not lock the first main-colour probe. During a reset/redraw the first
+     * neutral foreground can be a stale/dim UI label. Keep sampling until the
+     * stable-render freeze point, and continuously choose the best contrast
+     * candidate from the known SONG-screen main-text zones.
+     */
+    hud_add_theme_sample(hud_main_probe_samples, color, 8);
+
+    int probe_weight = 0;
+    SDL_Color best_probe = hud_best_main_probe_sample(&probe_weight);
+    if (probe_weight <= 0) return;
+
+    const bool changed = !hud_theme.main_probe_locked ||
+                         !hud_same_color(hud_theme.main, best_probe);
+
+    hud_theme.main = best_probe;
+    hud_theme.main_ready = true;
+    hud_theme.main_probe_locked = true;
+    global_foreground_color = best_probe;
+
+    if (changed) {
+        dirty = 1;
+
+        if (hud_theme_debug_enabled()) {
+            SDL_Log("HUD THEME probe main char='%c' x=%d y=%d sample=#%02X%02X%02X selected=#%02X%02X%02X weight=%d",
+                    c, x, y,
+                    color.r, color.g, color.b,
+                    best_probe.r, best_probe.g, best_probe.b, probe_weight);
+        }
+    }
+
+    hud_maybe_freeze_theme();
+}
+
+static void hud_set_highlight_theme_color_from_probe(SDL_Color color, int x, int y, char c,
+                                                     const char *source) {
+    if (hud_theme.theme_frozen) return;
+    if (!hud_is_cursor_highlight_color(color)) return;
+
+    hud_add_theme_sample(hud_highlight_probe_samples, color, 24);
+
+    int probe_weight = 0;
+    SDL_Color best_probe = hud_best_cursor_probe_sample(&probe_weight);
+    if (probe_weight <= 0) return;
+
+    const bool changed = !hud_theme.highlight_probe_locked ||
+                         !hud_same_color(hud_theme.highlight, best_probe);
+
+    hud_theme.highlight = best_probe;
+    hud_theme.highlight_ready = true;
+    hud_theme.highlight_locked = true;
+    hud_theme.highlight_probe_locked = true;
+
+    if (changed) {
+        dirty = 1;
+
+        if (hud_theme_debug_enabled()) {
+            SDL_Log("HUD THEME probe highlight %s char='%c' x=%d y=%d sample=#%02X%02X%02X selected=#%02X%02X%02X weight=%d",
+                    source, c, x, y,
+                    color.r, color.g, color.b,
+                    best_probe.r, best_probe.g, best_probe.b, probe_weight);
+        }
+    }
+
+    hud_maybe_freeze_theme();
+}
+
+static void hud_update_theme_from_samples(void) {
+    if (hud_theme.theme_frozen) return;
+
+    if (!hud_theme.main_probe_locked) {
+        int main_weight = 0;
+        SDL_Color main = hud_best_theme_sample(hud_main_samples, &main_weight);
+        if (main_weight >= 5 && !hud_same_color(hud_theme.main, main)) {
+            hud_theme.main = main;
+            hud_theme.main_ready = true;
+            global_foreground_color = main;
+            dirty = 1;
+        } else if (main_weight >= 5) {
+            hud_theme.main_ready = true;
+            global_foreground_color = hud_theme.main;
+        }
+    }
+
+    if (!hud_theme.highlight_probe_locked && !hud_theme.highlight_locked) {
         int highlight_weight = 0;
         SDL_Color highlight = hud_best_highlight_sample(hud_highlight_samples, &highlight_weight);
         if (highlight_weight >= 5) {
@@ -318,11 +606,26 @@ static void hud_debug_log_theme(void) {
             hud_theme.main.r, hud_theme.main.g, hud_theme.main.b,
             hud_theme.highlight.r, hud_theme.highlight.g, hud_theme.highlight.b);
     hud_log_theme_samples("main", hud_main_samples);
+    hud_log_theme_samples("main_probe", hud_main_probe_samples);
     hud_log_theme_samples("highlight", hud_highlight_samples);
+    hud_log_theme_samples("highlight_probe", hud_highlight_probe_samples);
 }
 
 static void hud_set_background_theme_color(SDL_Color color) {
-    if (!hud_theme.background_ready || !hud_same_color(hud_theme.background, color)) {
+    if (hud_theme.theme_frozen) {
+        global_background_color = hud_theme.background;
+        return;
+    }
+
+    const bool background_changed =
+        !hud_theme.background_ready || !hud_same_color(hud_theme.background, color);
+
+    if (!hud_theme.full_redraw_seen || background_changed) {
+        hud_theme.full_redraw_seen = true;
+        hud_theme.redraw_started_at = SDL_GetTicks();
+    }
+
+    if (background_changed) {
         hud_theme.background = color;
         hud_theme.background_ready = true;
         global_background_color = color;
@@ -330,8 +633,15 @@ static void hud_set_background_theme_color(SDL_Color color) {
         hud_theme.main_ready = false;
         hud_theme.highlight_ready = false;
         hud_theme.highlight_locked = false;
+        hud_theme.main_probe_locked = false;
+        hud_theme.highlight_probe_locked = false;
         hud_reset_theme_samples();
         dirty = 1;
+
+        if (hud_theme_debug_enabled()) {
+            SDL_Log("HUD THEME redraw anchor background=#%02X%02X%02X",
+                    color.r, color.g, color.b);
+        }
         return;
     }
 
@@ -339,12 +649,14 @@ static void hud_set_background_theme_color(SDL_Color color) {
 }
 
 static void hud_sample_main_theme_color(SDL_Color color) {
+    if (hud_theme.theme_frozen) return;
     if (!hud_theme.background_ready || hud_same_color(color, hud_theme.background)) return;
     hud_add_theme_sample(hud_main_samples, hud_normalize_main_color(color), 1);
     hud_update_theme_from_samples();
 }
 
 static void hud_sample_highlight_theme_color(SDL_Color color, int weight) {
+    if (hud_theme.theme_frozen) return;
     if (!hud_theme.background_ready || hud_same_color(color, hud_theme.background)) return;
     hud_add_theme_sample(hud_highlight_samples, color, weight);
     hud_update_theme_from_samples();
@@ -672,14 +984,29 @@ int draw_character(struct draw_character_command *command) {
       command->background.r << 16 | command->background.g << 8 | command->background.b;
 
   if (hud_theme.background_ready && command->c != ' ') {
-    if (hud_rgb_is_color(command->background.r, command->background.g, command->background.b,
-                         hud_theme.background)) {
-      hud_sample_main_theme_color(hud_make_color(command->foreground.r, command->foreground.g,
-                                                 command->foreground.b));
+    const int sample_x = command->pos.x;
+    const int sample_y = command->pos.y + text_offset_y + screen_offset_y;
+    const SDL_Color fg = hud_make_color(command->foreground.r, command->foreground.g,
+                                        command->foreground.b);
+    const SDL_Color bg = hud_make_color(command->background.r, command->background.g,
+                                        command->background.b);
+    const bool bg_is_screen_bg = !hud_rgb_is_not_background(command->background.r,
+                                                            command->background.g,
+                                                            command->background.b);
+
+    if (hud_is_song_main_probe_position(sample_x, sample_y) && bg_is_screen_bg) {
+      hud_set_main_theme_color_from_probe(fg, sample_x, sample_y, command->c);
+    }
+
+    if (hud_is_song_highlight_probe_position(sample_x, sample_y)) {
+      hud_set_highlight_theme_color_from_probe(fg, sample_x, sample_y, command->c, "fg");
+      hud_set_highlight_theme_color_from_probe(bg, sample_x, sample_y, command->c, "bg");
+    }
+
+    if (bg_is_screen_bg) {
+      hud_sample_main_theme_color(fg);
     } else {
-      hud_sample_highlight_theme_color(hud_make_color(command->background.r, command->background.g,
-                                                      command->background.b),
-                                       2);
+      hud_sample_highlight_theme_color(bg, 2);
     }
   }
 
@@ -707,14 +1034,21 @@ void draw_rectangle(struct draw_rectangle_command *command) {
                                hud_theme.background)) {
     const int screen_area = texture_width * texture_height;
     const int rect_area = (int)(render_rect.w * render_rect.h);
+    const SDL_Color rect_color = hud_make_color(command->color.r, command->color.g,
+                                                command->color.b);
+    const int rect_center_x = (int)(render_rect.x + render_rect.w / 2.0f);
+    const int rect_center_y = (int)(render_rect.y + render_rect.h / 2.0f);
+
+    if (hud_is_song_highlight_probe_position(rect_center_x, rect_center_y)) {
+      hud_set_highlight_theme_color_from_probe(rect_color, rect_center_x, rect_center_y,
+                                               ' ', "rect");
+    }
 
     if (rect_area > 0 && rect_area < screen_area / 2) {
       int weight = rect_area / 32;
       if (weight < 1) weight = 1;
       if (weight > 64) weight = 64;
-      hud_sample_highlight_theme_color(hud_make_color(command->color.r, command->color.g,
-                                                      command->color.b),
-                                       weight);
+      hud_sample_highlight_theme_color(rect_color, weight);
     }
   }
 
@@ -886,6 +1220,7 @@ void render_screen(config_params_s *conf) {
   }
 
   SDL_RenderPresent(rend);
+  hud_maybe_freeze_theme();
   SDL_SetRenderTarget(rend, main_texture);
   log_fps_stats();
 }
@@ -928,6 +1263,8 @@ void show_error_message(const char *message) {
 }
 
 void renderer_clear_screen(void) {
+  hud_reset_theme_for_display_reset("display reset");
+
   SDL_SetRenderDrawColor(rend, global_background_color.r, global_background_color.g,
                          global_background_color.b, 255);
   SDL_SetRenderTarget(rend, main_texture);

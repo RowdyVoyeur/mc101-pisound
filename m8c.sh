@@ -86,5 +86,5 @@ killall -s SIGINT alsa_out alsa_in 2>/dev/null
 
 # 8. Shutdown
 # Shutdown after quitting M8C
-sleep 2
-sudo shutdown now
+# sleep 2
+# sudo shutdown now

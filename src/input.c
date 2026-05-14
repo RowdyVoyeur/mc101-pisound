@@ -208,6 +208,7 @@ void input_handle_key_down_event(struct app_context *ctx, const SDL_Event *event
   }
 
   if (event->key.scancode == ctx->conf.key_reset && ctx->device_connected && !keyjazz_enabled) {
+    renderer_clear_screen();
     m8_reset_display();
     return;
   }
@@ -271,6 +272,7 @@ void input_handle_gamepad_button(struct app_context *ctx, const SDL_GamepadButto
 
   // Handle special button combinations
   if (gamepad_state.current_buttons == (key_start | key_select | key_opt | key_edit)) {
+    renderer_clear_screen();
     m8_reset_display();
     return;
   }

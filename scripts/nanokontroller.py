@@ -24,7 +24,8 @@ last_edited_val = None
 last_edited_text = None  
 last_sysex_time = 0
 last_interaction_time = 0
-last_touched_type = "cc" 
+last_touched_type = "cc"
+current_line1 = ""
 toggle_states = {}  
 param_states = {}  
 
@@ -44,11 +45,61 @@ FILTER_TYPE_LABELS = {0: "TVF", 1: "VCF"}
 SLP_LABELS = {0: "-12", 1: "-18", 2: "-24"}
 KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
 
+# Human-readable names used on HUD line 1.
+PARAMETER_LONG_NAMES = {
+    "001": "CC 001",
+    "002": "CC 002",
+    "M01": "M8 Macro 01",
+    "M02": "M8 Macro 02",
+    "CUT": "Cutoff",
+    "RES": "Resonance",
+    "LEV": "Level",
+    "PAN": "Pan",
+    "CHO": "Chorus Send",
+    "REV": "Reverb Send",
+    "OTY": "Oscillator Type",
+    "WAV": "Wave",
+    "BNK": "Bank",
+    "PW": "Pulse Width",
+    "PW ": "Pulse Width",
+    "PWD": "Pulse Width Depth",
+    "DET": "Detune",
+    "ST1": "Structure 1",
+    "ST3": "Structure 3",
+    "RNG": "Ring Mod Range",
+    "MOD": "Modulation",
+    "LV1": "Level 1",
+    "LV2": "Level 2",
+    "LV3": "Level 3",
+    "LV4": "Level 4",
+    "ANL": "Analog Feel",
+    "TIM": "Portamento Time",
+    "M/P": "Mono/Poly",
+    "PRM": "Portamento Mode",
+    "PRT": "Portamento",
+    "UNS": "Unison",
+    "CRS": "Coarse Tune",
+    "FIN": "Fine Tune",
+    "LCK": "Structure Lock",
+    "PSW": "Partial Switch",
+    "TYP": "Filter Type",
+    "ENV": "Filter Envelope",
+    "FLT": "Filter Model",
+    "KF": "Key Follow",
+    "KF ": "Key Follow",
+    "SLP": "Slope",
+    "HPF": "High-pass Cutoff",
+    "TRK": "Track",
+    "PAR": "Partial",
+    "PAD": "Pad",
+    "PBK": "Pad Bank",
+}
+
 PAD_NOTES = [37, 39, 42, 46, 49, 51, 54, 56, 36, 38, 41, 45, 48, 62, 63, 64]
 
 PRESETS = {
     PRESET_1: {
-        "name": "M8",
+        "name": "M8 PERFORMANCE",
         "display_values": False, 
         "scenes": {
             1: {
@@ -277,6 +328,55 @@ def get_drum_partial_address(track, pad, param_offset):
     pad_offset_int = to_7bit_int(0x001600) + (pad_key - 21) * 128
     return add_roland_address(base, to_7bit_hex(pad_offset_int), param_offset)
 
+def get_long_parameter_name(label):
+    if label is None:
+        return "Parameter"
+    key = str(label).strip()
+    return PARAMETER_LONG_NAMES.get(key, key or "Parameter")
+
+
+def get_value_text(value=None, text=None):
+    if text is not None:
+        return str(text)
+    if value is not None:
+        return str(value)
+    if last_edited_text is not None:
+        return str(last_edited_text)
+    if last_edited_val is not None:
+        return str(last_edited_val)
+    return ""
+
+
+def get_edit_target_path(preset_name):
+    parts = [preset_name]
+    if active_preset in (PRESET_4, PRESET_5, PRESET_6):
+        parts.append(f"T{active_track:02d}")
+    if active_preset == PRESET_6:
+        parts.append(f"P{active_partial:02d}")
+    elif active_preset == PRESET_5:
+        parts.append(f"PD{active_pad:02d}")
+    return " > ".join(parts)
+
+
+def build_preset_line1():
+    return PRESETS.get(active_preset, {}).get("name", "NONE")
+
+
+def build_scene_line1():
+    preset_data = PRESETS.get(active_preset, {})
+    scene_data = preset_data.get("scenes", {}).get(active_scene, {})
+    return f"{preset_data.get('name', 'NONE')} > {scene_data.get('name', f'S{active_scene}')}"
+
+
+def build_edit_line1(label=None, value=None, text=None):
+    preset_name = PRESETS.get(active_preset, {}).get("name", "NONE")
+    param_name = get_long_parameter_name(label if label is not None else last_edited_label)
+    value_text = get_value_text(value=value, text=text)
+    base = get_edit_target_path(preset_name)
+    if value_text:
+        return f"{base} > {param_name}: {value_text}"
+    return f"{base} > {param_name}"
+
 def get_mapping_label(m):
     if not m: return "---"
     out_type = m[0]
@@ -314,16 +414,9 @@ def clear_overlay():
 def update_overlay():
     preset_data = PRESETS.get(active_preset, {})
     scene_data = preset_data.get("scenes", {}).get(active_scene, {})
-    disp_vals, s_name, p_name = preset_data.get("display_values", True), scene_data.get("name", f"S{active_scene}"), preset_data.get('name', 'NONE')
-    tr_str = f"T{active_track:02d}"
-    if active_preset == PRESET_6:
-        pa_str = f"P{active_partial:02d}"
-        l1 = f"{p_name} > {s_name} > {tr_str} > {pa_str} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} > {tr_str} > {pa_str}"
-    elif active_preset == PRESET_5:
-        l1 = f"{p_name} > {s_name} > {tr_str} > PD{active_pad:02d} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} > {tr_str} > PD{active_pad:02d}"
-    else:
-        l1 = f"{p_name} > {s_name} > {last_edited_label} {last_edited_text or (last_edited_val if last_edited_val is not None else '')}" if disp_vals else f"{p_name} > {s_name} "
-    
+    p_name = preset_data.get("name", "NONE")
+    l1 = current_line1 or p_name
+
     mappings, all_labels, offset = scene_data.get("mappings", {}), [], (active_scene - 1) * 18
     for i in range(18):
         key = (last_touched_type, i + offset)
@@ -341,22 +434,26 @@ def update_overlay():
 
 def main():
     global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
-    global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time
+    global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time, current_line1
     try:
         in_port = mido.open_input('In', virtual=True, client_name='nanoRouterIN')
         out_port = mido.open_output('Out', virtual=True, client_name='nanoRouterOUT')
     except Exception as e: sys.exit(f"Failed: {e}")
+    current_line1 = build_preset_line1()
     update_overlay()
 
     def midi_callback(msg):
         global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
-        global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time
+        global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time, current_line1
         if msg.type == 'sysex' and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
-            active_scene = msg.data[8] + 1; update_overlay(); return
+            active_scene = msg.data[8] + 1; current_line1 = build_scene_line1(); update_overlay(); return
         if msg.type == 'control_change' and msg.control in PRESETS:
             if msg.value > 0:
                 active_preset = msg.control
                 p_info, last_edited_label, last_edited_val, last_edited_text = PRESETS.get(active_preset, {}), None, None, None
+                if active_scene not in p_info.get("scenes", {}):
+                    active_scene = 1
+                current_line1 = build_preset_line1()
                 t_trigger = time.time(); last_interaction_time = t_trigger
                 if not p_info.get("display_values", True):
                     last_touched_type = "cc"
@@ -380,21 +477,25 @@ def main():
                 new_state = not toggle_states.get(s_key, False)
                 toggle_states[s_key] = new_state; val = 127 if new_state else 0
             if out_type == "track_select" and is_press:
-                active_track, last_edited_label, last_edited_val, last_edited_text = m[1], m[2], None, None
-                update_overlay() if p_info.get("display_values", True) else clear_overlay(); return
+                active_track, last_edited_label, last_edited_val, last_edited_text = m[1], "TRK", None, m[2]
+                current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
+                update_overlay(); return
             if out_type == "partial_select" and is_press:
-                active_partial, last_edited_label, last_edited_val, last_edited_text = m[1], m[2], None, None
-                update_overlay() if p_info.get("display_values", True) else clear_overlay(); return
+                active_partial, last_edited_label, last_edited_val, last_edited_text = m[1], "PAR", None, m[2]
+                current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
+                update_overlay(); return
             if out_type == "drum_pad_select":
                 c_pad = active_pad_bank * 4 + m[1]; p_key = PAD_NOTES[c_pad - 1]
                 if is_press:
-                    active_pad, last_edited_label, last_edited_val, last_edited_text = c_pad, f"PD{c_pad:02d}", None, None
+                    active_pad, last_edited_label, last_edited_val, last_edited_text = c_pad, "PAD", None, f"PD{c_pad:02d}"
+                    current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
                     out_port.send(mido.Message('note_on', channel=active_track - 1, note=p_key, velocity=val))
-                    update_overlay() if p_info.get("display_values", True) else clear_overlay()
+                    update_overlay(); return
                 else: out_port.send(mido.Message('note_off', channel=active_track - 1, note=p_key, velocity=0)); return
             if out_type == "drum_pad_bank" and is_press:
-                active_pad_bank, last_edited_label, last_edited_val, last_edited_text = (active_pad_bank + m[1]) % 4, m[2], None, None
-                update_overlay() if p_info.get("display_values", True) else clear_overlay(); return
+                active_pad_bank, last_edited_label, last_edited_val, last_edited_text = (active_pad_bank + m[1]) % 4, "PBK", None, m[2]
+                current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
+                update_overlay(); return
             if out_type in ["sysex", "conditional_sysex", "sysex_track", "dynamic_sysex_track", "conditional_sysex_track", "drum_sysex_partial"]:
                 if out_type in ["sysex", "sysex_track"]: target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
                 elif out_type == "dynamic_sysex_track": target = (m[1].get(active_partial, 0), m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
@@ -415,16 +516,18 @@ def main():
                         send_sysex(out_port, addr, f_val, size)
                     if lbl in ["BNK", "WNO"]: send_sysex(out_port, get_mc101_address(active_track, active_partial, 0x1B), 0, 1)
                     last_sysex_time, last_edited_label, last_edited_val, last_edited_text = now, lbl, f_val, (t_map.get(f_val) if t_map else None)
-                    update_overlay() if p_info.get("display_values", True) else clear_overlay()
+                    current_line1 = build_edit_line1(lbl, value=last_edited_val, text=last_edited_text)
+                    update_overlay()
             else:
                 lbl = get_mapping_label(m)
                 if out_type == "note": out_port.send(mido.Message('note_on' if val > 0 else 'note_off', channel=m[1], note=m[2], velocity=val))
                 elif out_type == "cc": out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=val))
-                if p_info.get("display_values", True):
-                    if msg.type == 'control_change' or is_press or is_toggle:
-                        last_edited_label, last_edited_val, last_edited_text = lbl, (val if out_type == "cc" else None), (None if out_type == "cc" else ("ON" if val > 0 else "OFF"))
-                        update_overlay()
-                else: clear_overlay() if (msg.type == 'control_change' or is_press or is_toggle) else None
+                if msg.type == 'control_change' or is_press or is_toggle:
+                    last_edited_label = lbl
+                    last_edited_val = val if out_type == "cc" else None
+                    last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
+                    current_line1 = build_edit_line1(lbl, value=last_edited_val, text=last_edited_text)
+                    update_overlay()
 
     in_port.callback = midi_callback
     try:
