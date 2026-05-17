@@ -695,6 +695,23 @@ static void hud_draw_line(SDL_Renderer *renderer, const char *text, int x, int y
 static void hud_apply_overlay_message(char *message) {
     message[strcspn(message, "\r\n")] = '\0';
 
+    bool has_visible_content = false;
+    for (char *p = message; *p != '\0'; p++) {
+        if (!isspace((unsigned char)*p) && *p != '~') {
+            has_visible_content = true;
+            break;
+        }
+    }
+
+    if (!has_visible_content || strcmp(message, "__M8C_OVERLAY_CLEAR__") == 0) {
+        for (int j = 0; j < 3; j++) {
+            hud.lines[j][0] = '\0';
+        }
+        hud.active = false;
+        dirty = 1;
+        return;
+    }
+
     for (int j = 0; j < 3; j++) {
         hud.lines[j][0] = '\0';
     }

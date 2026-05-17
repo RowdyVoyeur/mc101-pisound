@@ -1,15 +1,56 @@
 #!/usr/bin/env python3
-import sys, time, os, mido
+import sys
+import time
+import os
+import mido
 import threading
 
 # --- CONFIGURATION ---
 OVERLAY_PIPE = "/tmp/m8c_overlay"
+M8_CHANNEL = 15  # MIDI channel 16 in mido's zero-based numbering.
 
-# Transport Buttons
-PRESET_1 = 127 # Rewind
-PRESET_4 = 124 # Loop
-PRESET_5 = 123 # Play
-PRESET_6 = 122 # Rec
+# Presets
+PRESET_1 = 1
+PRESET_2 = 2
+PRESET_3 = 3
+PRESET_4 = 4
+PRESET_5 = 5
+PRESET_6 = 6
+PRESET_7 = 7
+PRESET_8 = 8
+
+# Preset selection controls.
+PRESET_PREFIX_PRIMARY = 127    # Follow with selector to choose Presets 1-4.
+PRESET_PREFIX_SECONDARY = 125  # Follow with selector to choose Presets 5-8.
+PRESET_PREFIX_TIMEOUT = 2.0
+
+# These CCs select presets when combined with CC 127 or CC 125.
+# When pressed by themselves, they send the M8 cursor notes on MIDI channel 16.
+# MIDI note numbers use C-1 = 0.
+PRESET_SELECTOR_NOTES = {
+    126: (6, "Up"),     # F#-1
+    123: (7, "Down"),   # G-1
+    124: (4, "Left"),   # E-1
+    122: (5, "Right"),  # F-1
+}
+
+SELECTOR_NOTE_PULSE_SECONDS = 0.025
+# When an arrow is held, emulate the M8 hardware key repeat by sending
+# repeated short note pulses while any modifier buttons, such as Shift, stay held.
+ARROW_REPEAT_INITIAL_DELAY_SECONDS = 0.32
+ARROW_REPEAT_INTERVAL_SECONDS = 0.08
+LOOPBACK_IGNORE_SECONDS = 0.30
+
+PRESET_COMBOS = {
+    (PRESET_PREFIX_PRIMARY, 126): PRESET_1,
+    (PRESET_PREFIX_PRIMARY, 123): PRESET_2,
+    (PRESET_PREFIX_PRIMARY, 124): PRESET_3,
+    (PRESET_PREFIX_PRIMARY, 122): PRESET_4,
+    (PRESET_PREFIX_SECONDARY, 126): PRESET_5,
+    (PRESET_PREFIX_SECONDARY, 123): PRESET_6,
+    (PRESET_PREFIX_SECONDARY, 124): PRESET_7,
+    (PRESET_PREFIX_SECONDARY, 122): PRESET_8,
+}
 
 # Global State
 active_preset = PRESET_1
@@ -20,19 +61,28 @@ active_pad = 1
 active_pad_bank = 0
 
 last_edited_label = None
+last_edited_name = None
 last_edited_val = None
-last_edited_text = None  
+last_edited_text = None
 last_sysex_time = 0
 last_interaction_time = 0
 last_touched_type = "cc"
 current_line1 = ""
-toggle_states = {}  
-param_states = {}  
+preset_prefix = None
+preset_prefix_time = 0
+selector_last_fire = {}
+ignored_output_notes = {}
+output_notes_held = set()
+arrow_repeat_stops = {}
+arrow_repeat_lock = threading.Lock()
+
+toggle_states = {}
+param_states = {}
 
 # --- VALUE MAPS ---
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
 BANK_LABELS = {8: "A", 10: "B", 11: "C"}
-VA_WAVE_LABELS = {0:"SAW", 1:"SQR", 2:"TRI", 3:"SIN", 4:"RMP", 5:"JUN", 6:"TR2", 7:"TR3", 8:"SI2"}
+VA_WAVE_LABELS = {0: "SAW", 1: "SQR", 2: "TRI", 3: "SIN", 4: "RMP", 5: "JUN", 6: "TR2", 7: "TR3", 8: "SI2"}
 PWD_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
 SYN_WAVE_LABELS = {i: f"{i+1:02d}" for i in range(48)}
 CRS_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(16, 113)}
@@ -45,241 +95,261 @@ FILTER_TYPE_LABELS = {0: "TVF", 1: "VCF"}
 SLP_LABELS = {0: "-12", 1: "-18", 2: "-24"}
 KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
 
-# Human-readable names used on HUD line 1.
-PARAMETER_LONG_NAMES = {
-    "001": "CC 001",
-    "002": "CC 002",
-    "M01": "M8 Macro 01",
-    "M02": "M8 Macro 02",
-    "CUT": "Cutoff",
-    "RES": "Resonance",
-    "LEV": "Level",
-    "PAN": "Pan",
-    "CHO": "Chorus Send",
-    "REV": "Reverb Send",
-    "OTY": "Oscillator Type",
-    "WAV": "Wave",
-    "BNK": "Bank",
-    "PW": "Pulse Width",
-    "PW ": "Pulse Width",
-    "PWD": "Pulse Width Depth",
-    "DET": "Detune",
-    "ST1": "Structure 1",
-    "ST3": "Structure 3",
-    "RNG": "Ring Mod Range",
-    "MOD": "Modulation",
-    "LV1": "Level 1",
-    "LV2": "Level 2",
-    "LV3": "Level 3",
-    "LV4": "Level 4",
-    "ANL": "Analog Feel",
-    "TIM": "Portamento Time",
-    "M/P": "Mono/Poly",
-    "PRM": "Portamento Mode",
-    "PRT": "Portamento",
-    "UNS": "Unison",
-    "CRS": "Coarse Tune",
-    "FIN": "Fine Tune",
-    "LCK": "Structure Lock",
-    "PSW": "Partial Switch",
-    "TYP": "Filter Type",
-    "ENV": "Filter Envelope",
-    "FLT": "Filter Model",
-    "KF": "Key Follow",
-    "KF ": "Key Follow",
-    "SLP": "Slope",
-    "HPF": "High-pass Cutoff",
-    "TRK": "Track",
-    "PAR": "Partial",
-    "PAD": "Pad",
-    "PBK": "Pad Bank",
-}
-
 PAD_NOTES = [37, 39, 42, 46, 49, 51, 54, 56, 36, 38, 41, 45, 48, 62, 63, 64]
+
+# Mapping metadata helpers.
+# Long, human-readable names live inside each mapping using named(...).
+PARAMETER_NAME_KEY = "__parameter_name__"
+
+def named(mapping, parameter_name):
+    return (*mapping, {PARAMETER_NAME_KEY: parameter_name})
+
+def is_parameter_name_meta(value):
+    return isinstance(value, dict) and PARAMETER_NAME_KEY in value
+
+def is_value_map_dict(value):
+    return isinstance(value, dict) and not is_parameter_name_meta(value)
+
+def strip_mapping_metadata(mapping):
+    if not isinstance(mapping, tuple):
+        return mapping
+    return tuple(item for item in mapping if not is_parameter_name_meta(item))
+
+def get_configured_parameter_name(mapping, fallback=None):
+    if isinstance(mapping, tuple):
+        for item in reversed(mapping):
+            if is_parameter_name_meta(item):
+                return item[PARAMETER_NAME_KEY]
+    return fallback or "Parameter"
 
 PRESETS = {
     PRESET_1: {
         "name": "M8 PERFORMANCE",
-        "display_values": False, 
+        "context": "m8",
+        "display_values": False,
         "scenes": {
             1: {
                 "name": "MIXER",
                 "mappings": {
-                    ("cc", 0): ("cc", 15, 1, "001"),
-                    ("cc", 1): ("cc", 15, 2, "002"),
-                    ("note", 0): ("note", 15, 12, "toggle", "M01"),
-                    ("note", 1): ("note", 15, 13, "toggle", "M02"),
-                }    
+                    ("cc", 0): named(("cc", M8_CHANNEL, 1, "001"), "CC 001"),
+                    ("cc", 1): named(("cc", M8_CHANNEL, 2, "002"), "CC 002"),
+                    ("note", 0): named(("note", M8_CHANNEL, 12, "toggle", "M01"), "M8 Macro 01"),
+                    ("note", 1): named(("note", M8_CHANNEL, 13, "toggle", "M02"), "M8 Macro 02"),
+
+                    # Requested Preset 1 M8 button mappings. MIDI note numbers use C-1 = 0.
+                    # Physical G-1/G#-1/E0/F0 send short M8 button pulses.
+                    ("note", 7): named(("m8_button", M8_CHANNEL, 3, "Option"), "Option"),
+                    ("note", 8): named(("m8_button", M8_CHANNEL, 2, "Edit"), "Edit"),
+                    ("note", 16): named(("m8_button", M8_CHANNEL, 1, "Shift"), "Shift"),
+                    ("note", 17): named(("m8_button", M8_CHANNEL, 0, "Play"), "Play"),
+                }
             }
         }
     },
+    PRESET_2: {
+        "name": "EMPTY",
+        "context": "none",
+        "display_values": False,
+        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+    },
+    PRESET_3: {
+        "name": "EMPTY",
+        "context": "none",
+        "display_values": False,
+        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+    },
     PRESET_4: {
+        "name": "EMPTY",
+        "context": "none",
+        "display_values": False,
+        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+    },
+PRESET_5: {
         "name": "MC-101",
-        "display_values": True, 
+        "context": "track",
+        "default_track": 2,
+        "display_values": True,
         "scenes": {
             1: {
                 "name": "TRACK 2",
                 "mappings": {
-                    ("cc", 0): ("cc", 1, 74, "CUT"),
-                    ("cc", 1): ("cc", 1, 71, "RES"),
-                }    
-            }
-        }
-    },
-    PRESET_5: {
-        "name": "MC-101",
-        "display_values": True, 
-        "scenes": {
-            1: {
-                "name": "DRUM TRACK",
-                "mappings": {
-                    ("note", 0): ("track_select", 1, "T01"),
-                    ("note", 1): ("track_select", 2, "T02"),
-                    ("note", 2): ("track_select", 3, "T03"),
-                    ("note", 3): ("track_select", 4, "T04"),
-                    ("note", 5): ("drum_pad_select", 1),
-                    ("note", 6): ("drum_pad_select", 2),
-                    ("note", 7): ("drum_pad_select", 3),
-                    ("note", 8): ("drum_pad_select", 4),
-                    ("note", 16): ("drum_pad_bank", -1, "B-1"),
-                    ("note", 17): ("drum_pad_bank", 1, "B+1"),
-                    ("cc", 5): ("drum_sysex_partial", 0x0009, 127, "LEV", 1),
-                    ("cc", 6): ("drum_sysex_partial", 0x000A, 127, "PAN", 1, None, PAN_LABELS),
-                    ("cc", 7): ("drum_sysex_partial", 0x000B, 127, "CHO", 1),
-                    ("cc", 8): ("drum_sysex_partial", 0x000C, 127, "REV", 1),
+                    ("cc", 0): named(("cc", 1, 74, "CUT"), "Cutoff"),
+                    ("cc", 1): named(("cc", 1, 71, "RES"), "Resonance"),
                 }
             }
         }
     },
     PRESET_6: {
         "name": "MC-101",
-        "display_values": True, 
+        "context": "drum",
+        "default_track": 1,
+        "display_values": True,
+        "scenes": {
+            1: {
+                "name": "DRUM TRACK",
+                "mappings": {
+                    ("note", 0): named(("track_select", 1, "T01"), "Track"),
+                    ("note", 1): named(("track_select", 2, "T02"), "Track"),
+                    ("note", 2): named(("track_select", 3, "T03"), "Track"),
+                    ("note", 3): named(("track_select", 4, "T04"), "Track"),
+                    ("note", 5): named(("drum_pad_select", 1), "Pad"),
+                    ("note", 6): named(("drum_pad_select", 2), "Pad"),
+                    ("note", 7): named(("drum_pad_select", 3), "Pad"),
+                    ("note", 8): named(("drum_pad_select", 4), "Pad"),
+                    ("note", 16): named(("drum_pad_bank", -1, "B-1"), "Pad Bank"),
+                    ("note", 17): named(("drum_pad_bank", 1, "B+1"), "Pad Bank"),
+                    ("cc", 5): named(("drum_sysex_partial", 0x0009, 127, "LEV", 1), "Level"),
+                    ("cc", 6): named(("drum_sysex_partial", 0x000A, 127, "PAN", 1, None, PAN_LABELS), "Pan"),
+                    ("cc", 7): named(("drum_sysex_partial", 0x000B, 127, "CHO", 1), "Chorus Send"),
+                    ("cc", 8): named(("drum_sysex_partial", 0x000C, 127, "REV", 1), "Reverb Send"),
+                }
+            }
+        }
+    },
+    PRESET_7: {
+        "name": "MC-101",
+        "context": "partial",
+        "default_track": 1,
+        "display_values": True,
         "scenes": {
             1: {
                 "name": "OSC & COM",
                 "mappings": {
-                    ("cc", 0): ("sysex", 0x3E00, 4, "OTY", 1, OSC_TYPE_LABELS),       
+                    ("cc", 0): named(("sysex", 0x3E00, 4, "OTY", 1, OSC_TYPE_LABELS), "Oscillator Type"),
                     ("cc", 1): ("conditional_sysex", ("cc", 0), {
-                        0: (None, 0, "---", 1),              
-                        1: (0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS),
-                        2: (None, 0, "---", 1),  
-                        3: (None, 0, "---", 1)   
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS), "Wave"),
+                        2: named((None, 0, "---", 1), "Unavailable"),
+                        3: named((None, 0, "---", 1), "Unavailable")
                     }),
                     ("cc", 2): ("conditional_sysex", ("cc", 0), {
-                        0: ([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], BANK_LABELS), 
-                        1: (0x3E06, 127, "PW ", 1),
-                        2: (0x3E02, 47, "WAV", 4, None, SYN_WAVE_LABELS),  
-                        3: (0x3E08, 127, "DET", 1) 
+                        0: named(([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], BANK_LABELS), "Bank"),
+                        1: named((0x3E06, 127, "PW ", 1), "Pulse Width"),
+                        2: named((0x3E02, 47, "WAV", 4, None, SYN_WAVE_LABELS), "Wave"),
+                        3: named((0x3E08, 127, "DET", 1), "Detune")
                     }),
                     ("cc", 3): ("conditional_sysex", ("cc", 0), {
                         0: ("bank_dependent", {
-                             8: ([0x2020, 0x2038], 963, "WAV", 4),
-                            10: ([0x2020, 0x2038], 257, "WAV", 4),
-                            11: ([0x2020, 0x2038], 620, "WAV", 4)
+                            8: named(([0x2020, 0x2038], 963, "WAV", 4), "Wave"),
+                            10: named(([0x2020, 0x2038], 257, "WAV", 4), "Wave"),
+                            11: named(([0x2020, 0x2038], 620, "WAV", 4), "Wave")
                         }),
-                        1: (0x3E07, 126, "PWD", 1, list(range(1, 128)), PWD_LABELS),
-                        2: (None, 0, "---", 1),  
-                        3: (None, 0, "---", 1)   
+                        1: named((0x3E07, 126, "PWD", 1, list(range(1, 128)), PWD_LABELS), "Pulse Width Depth"),
+                        2: named((None, 0, "---", 1), "Unavailable"),
+                        3: named((None, 0, "---", 1), "Unavailable")
                     }),
-                    ("cc", 4): ("sysex_track", 0x3D00, 4, "ST1", 1, ST1_LABELS),
+                    ("cc", 4): named(("sysex_track", 0x3D00, 4, "ST1", 1, ST1_LABELS), "Structure 1"),
                     ("cc", 5): ("conditional_sysex_track", ("cc", 4), {
-                        0: (None, 0, "---", 1),
-                        1: (None, 0, "---", 1),
-                        2: (0x3D02, 127, "RNG", 1),           
-                        3: (0x3D08, 10800, "MOD", 4),         
-                        4: (0x3D15, 127, "MOD", 1)            
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((0x3D02, 127, "RNG", 1), "Ring Mod Range"),
+                        3: named((0x3D08, 10800, "MOD", 4), "Modulation"),
+                        4: named((0x3D15, 127, "MOD", 1), "Modulation")
                     }),
                     ("cc", 13): ("conditional_sysex_track", ("cc", 4), {
-                        0: (None, 0, "---", 1),
-                        1: (None, 0, "---", 1),
-                        2: (0x3D04, 127, "LV1", 1),           
-                        3: (0x3D10, 127, "LV1", 1),           
-                        4: (0x3D10, 127, "LV1", 1)            
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((0x3D04, 127, "LV1", 1), "Level 1"),
+                        3: named((0x3D10, 127, "LV1", 1), "Level 1"),
+                        4: named((0x3D10, 127, "LV1", 1), "Level 1")
                     }),
                     ("cc", 14): ("conditional_sysex_track", ("cc", 4), {
-                        0: (None, 0, "---", 1),
-                        1: (None, 0, "---", 1),
-                        2: (0x3D05, 127, "LV2", 1),           
-                        3: (0x3D11, 127, "LV2", 1),           
-                        4: (0x3D11, 127, "LV2", 1)            
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((0x3D05, 127, "LV2", 1), "Level 2"),
+                        3: named((0x3D11, 127, "LV2", 1), "Level 2"),
+                        4: named((0x3D11, 127, "LV2", 1), "Level 2")
                     }),
-                    ("cc", 6): ("sysex_track", 0x3D01, 4, "ST3", 1, ST1_LABELS),
+                    ("cc", 6): named(("sysex_track", 0x3D01, 4, "ST3", 1, ST1_LABELS), "Structure 3"),
                     ("cc", 7): ("conditional_sysex_track", ("cc", 6), {
-                        0: (None, 0, "---", 1),
-                        1: (None, 0, "---", 1),
-                        2: (0x3D03, 127, "RNG", 1),           
-                        3: (0x3D0C, 10800, "MOD", 4),         
-                        4: (0x3D16, 127, "MOD", 1)            
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((0x3D03, 127, "RNG", 1), "Ring Mod Range"),
+                        3: named((0x3D0C, 10800, "MOD", 4), "Modulation"),
+                        4: named((0x3D16, 127, "MOD", 1), "Modulation")
                     }),
                     ("cc", 15): ("conditional_sysex_track", ("cc", 6), {
-                        0: (None, 0, "---", 1),
-                        1: (None, 0, "---", 1),
-                        2: (0x3D06, 127, "LV3", 1),           
-                        3: (0x3D12, 127, "LV3", 1),           
-                        4: (0x3D12, 127, "LV3", 1)            
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((0x3D06, 127, "LV3", 1), "Level 3"),
+                        3: named((0x3D12, 127, "LV3", 1), "Level 3"),
+                        4: named((0x3D12, 127, "LV3", 1), "Level 3")
                     }),
                     ("cc", 16): ("conditional_sysex_track", ("cc", 6), {
-                        0: (None, 0, "---", 1),
-                        1: (None, 0, "---", 1),
-                        2: (0x3D07, 127, "LV4", 1),           
-                        3: (0x3D13, 127, "LV4", 1),           
-                        4: (0x3D13, 127, "LV4", 1)            
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((0x3D07, 127, "LV4", 1), "Level 4"),
+                        3: named((0x3D13, 127, "LV4", 1), "Level 4"),
+                        4: named((0x3D13, 127, "LV4", 1), "Level 4")
                     }),
-                    ("cc", 8): ("sysex_track", 0x001C, 127, "ANL", 1), 
-                    ("cc", 17): ("sysex_track", 0x0024, 1023, "TIM", 4), 
-                    ("note", 8): ("sysex_track", 0x001D, 1, "M/P", 1, {0: "MNO", 1: "PLY"}, "toggle"),
-                    ("note", 16): ("sysex_track", 0x0021, 1, "PRM", 1, {0: "NRM", 1: "LGT"}, "toggle"),
-                    ("note", 17): ("sysex_track", 0x0020, 1, "PRT", 1, {0: "OFF", 1: "ON"}, "toggle"),
-                    ("note", 7): ("sysex_track", 0x3C00, 1, "UNS", 1, {0: "OFF", 1: "ON"}, "toggle"),
-                    ("cc", 9): ("sysex", 0x2001, 96, "CRS", 1, list(range(16, 113)), CRS_LABELS),
-                    ("cc", 10): ("sysex", 0x2002, 100, "FIN", 1, list(range(14, 115)), FIN_LABELS),
-                    ("cc", 11): ("sysex", 0x2000, 127, "LEV", 1), 
-                    ("cc", 12): ("sysex", 0x2007, 127, "PAN", 1, None, PAN_LABELS),
-                    ("note", 0): ("track_select", 1, "T01"),
-                    ("note", 1): ("track_select", 2, "T02"),
-                    ("note", 2): ("track_select", 3, "T03"),
-                    ("note", 3): ("track_select", 4, "T04"),
-                    ("note", 4): ("conditional_sysex_track", ("cc", 4), {
-                        0: (None, 0, "---", 1), 1: (None, 0, "---", 1), 2: (None, 0, "---", 1),
-                        3: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}),
-                        4: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}),
-                    }, "toggle"),
-                    ("note", 6): ("conditional_sysex_track", ("cc", 6), {
-                        0: (None, 0, "---", 1), 1: (None, 0, "---", 1), 2: (None, 0, "---", 1),
-                        3: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}),
-                        4: (0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}),
-                    }, "toggle"),
-                    ("note", 9): ("partial_select", 1, "P01"),
-                    ("note", 10): ("partial_select", 2, "P02"),
-                    ("note", 11): ("partial_select", 3, "P03"),
-                    ("note", 12): ("partial_select", 4, "P04"),
-                    ("note", 13): ("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"),
+                    ("cc", 8): named(("sysex_track", 0x001C, 127, "ANL", 1), "Analog Feel"),
+                    ("cc", 17): named(("sysex_track", 0x0024, 1023, "TIM", 4), "Portamento Time"),
+                    ("note", 8): named(("sysex_track", 0x001D, 1, "M/P", 1, {0: "MNO", 1: "PLY"}, "toggle"), "Mono/Poly"),
+                    ("note", 16): named(("sysex_track", 0x0021, 1, "PRM", 1, {0: "NRM", 1: "LGT"}, "toggle"), "Portamento Mode"),
+                    ("note", 17): named(("sysex_track", 0x0020, 1, "PRT", 1, {0: "OFF", 1: "ON"}, "toggle"), "Portamento"),
+                    ("note", 7): named(("sysex_track", 0x3C00, 1, "UNS", 1, {0: "OFF", 1: "ON"}, "toggle"), "Unison"),
+                    ("cc", 9): named(("sysex", 0x2001, 96, "CRS", 1, list(range(16, 113)), CRS_LABELS), "Coarse Tune"),
+                    ("cc", 10): named(("sysex", 0x2002, 100, "FIN", 1, list(range(14, 115)), FIN_LABELS), "Fine Tune"),
+                    ("cc", 11): named(("sysex", 0x2000, 127, "LEV", 1), "Level"),
+                    ("cc", 12): named(("sysex", 0x2007, 127, "PAN", 1, None, PAN_LABELS), "Pan"),
+                    ("note", 0): named(("track_select", 1, "T01"), "Track"),
+                    ("note", 1): named(("track_select", 2, "T02"), "Track"),
+                    ("note", 2): named(("track_select", 3, "T03"), "Track"),
+                    ("note", 3): named(("track_select", 4, "T04"), "Track"),
+                    ("note", 4): named(("conditional_sysex_track", ("cc", 4), {
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((None, 0, "---", 1), "Unavailable"),
+                        3: named((0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}), "Structure Lock"),
+                        4: named((0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}), "Structure Lock"),
+                    }, "toggle"), "Structure Lock"),
+                    ("note", 6): named(("conditional_sysex_track", ("cc", 6), {
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((None, 0, "---", 1), "Unavailable"),
+                        2: named((None, 0, "---", 1), "Unavailable"),
+                        3: named((0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}), "Structure Lock"),
+                        4: named((0x3D14, 1, "LCK", 1, None, {0: "OFF", 1: "ON"}), "Structure Lock"),
+                    }, "toggle"), "Structure Lock"),
+                    ("note", 9): named(("partial_select", 1, "P01"), "Partial"),
+                    ("note", 10): named(("partial_select", 2, "P02"), "Partial"),
+                    ("note", 11): named(("partial_select", 3, "P03"), "Partial"),
+                    ("note", 12): named(("partial_select", 4, "P04"), "Partial"),
+                    ("note", 13): named(("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"), "Partial Switch"),
                 }
             },
             2: {
                 "name": "FIL & ENV",
                 "mappings": {
-                    ("cc", 18): ("sysex", 0x2031, 6, "TYP", 1, TVF_TYP_LABELS),
-                    ("cc", 19): ("sysex", 0x2032, 1023, "CUT", 4),
-                    ("cc", 20): ("sysex", 0x203D, 1023, "RES", 4),
-                    ("cc", 21): ("sysex", 0x2800, 126, "ENV", 1, list(range(1, 128)), ENV_LABELS),
-                    ("cc", 22): ("sysex", 0x3E0E, 1, "FLT", 1, FILTER_TYPE_LABELS),
-                    ("cc", 23): ("sysex", 0x2036, 400, "KF ", 4, list(range(824, 1225)), KF_LABELS),
-                    ("cc", 24): ("sysex", 0x3E0F, 2, "SLP", 1, SLP_LABELS),
-                    ("cc", 25): ("conditional_sysex", ("cc", 22), {0: (None, 0, "---", 1), 1: (0x3E0A, 1023, "HPF", 4)}),
-                    ("note", 18): ("track_select", 1, "T01"),
-                    ("note", 19): ("track_select", 2, "T02"),
-                    ("note", 20): ("track_select", 3, "T03"),
-                    ("note", 21): ("track_select", 4, "T04"),
-                    ("note", 27): ("partial_select", 1, "P01"),
-                    ("note", 28): ("partial_select", 2, "P02"),
-                    ("note", 29): ("partial_select", 3, "P03"),
-                    ("note", 30): ("partial_select", 4, "P04"),
-                    ("note", 31): ("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"),
+                    ("cc", 18): named(("sysex", 0x2031, 6, "TYP", 1, TVF_TYP_LABELS), "Filter Type"),
+                    ("cc", 19): named(("sysex", 0x2032, 1023, "CUT", 4), "Cutoff"),
+                    ("cc", 20): named(("sysex", 0x203D, 1023, "RES", 4), "Resonance"),
+                    ("cc", 21): named(("sysex", 0x2800, 126, "ENV", 1, list(range(1, 128)), ENV_LABELS), "Filter Envelope"),
+                    ("cc", 22): named(("sysex", 0x3E0E, 1, "FLT", 1, FILTER_TYPE_LABELS), "Filter Model"),
+                    ("cc", 23): named(("sysex", 0x2036, 400, "KF ", 4, list(range(824, 1225)), KF_LABELS), "Key Follow"),
+                    ("cc", 24): named(("sysex", 0x3E0F, 2, "SLP", 1, SLP_LABELS), "Slope"),
+                    ("cc", 25): ("conditional_sysex", ("cc", 22), {
+                        0: named((None, 0, "---", 1), "Unavailable"),
+                        1: named((0x3E0A, 1023, "HPF", 4), "High-pass Cutoff")
+                    }),
+                    ("note", 18): named(("track_select", 1, "T01"), "Track"),
+                    ("note", 19): named(("track_select", 2, "T02"), "Track"),
+                    ("note", 20): named(("track_select", 3, "T03"), "Track"),
+                    ("note", 21): named(("track_select", 4, "T04"), "Track"),
+                    ("note", 27): named(("partial_select", 1, "P01"), "Partial"),
+                    ("note", 28): named(("partial_select", 2, "P02"), "Partial"),
+                    ("note", 29): named(("partial_select", 3, "P03"), "Partial"),
+                    ("note", 30): named(("partial_select", 4, "P04"), "Partial"),
+                    ("note", 31): named(("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"), "Partial Switch"),
                 }
             }
         }
-    }
+    },
+    PRESET_8: {
+        "name": "EMPTY",
+        "context": "none",
+        "display_values": False,
+        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+    },
 }
 
 # --- ROLAND 7-BIT SYSEX MATH HELPERS ---
@@ -293,7 +363,8 @@ def to_7bit_hex(value):
 
 def add_roland_address(base, *offsets):
     val = to_7bit_int(base)
-    for off in offsets: val += to_7bit_int(off)
+    for off in offsets:
+        val += to_7bit_int(off)
     return to_7bit_hex(val)
 
 def compute_checksum(payload):
@@ -303,12 +374,15 @@ def send_sysex(out_port, address, value, size):
     DEVICE_ID, MODEL_ID = 0x10, [0x00, 0x00, 0x00, 0x5E]
     header = [0x41, DEVICE_ID] + MODEL_ID + [0x12]
     addr_bytes = [(address >> 24) & 0x7F, (address >> 16) & 0x7F, (address >> 8) & 0x7F, address & 0x7F]
-    if size == 4: data_bytes = [(value >> 12) & 0x0F, (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F]
-    elif size == 2: data_bytes = [(value >> 7) & 0x7F, value & 0x7F]
-    else: data_bytes = [value & 0x7F]
+    if size == 4:
+        data_bytes = [(value >> 12) & 0x0F, (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F]
+    elif size == 2:
+        data_bytes = [(value >> 7) & 0x7F, value & 0x7F]
+    else:
+        data_bytes = [value & 0x7F]
     payload = addr_bytes + data_bytes
     sysex_data = header + payload + [compute_checksum(payload)]
-    out_port.send(mido.Message('sysex', data=sysex_data))
+    out_port.send(mido.Message("sysex", data=sysex_data))
 
 # --- ADDRESS GENERATORS ---
 def get_mc101_address(track, partial, param_offset):
@@ -318,23 +392,13 @@ def get_mc101_address(track, partial, param_offset):
     return add_roland_address(base, to_7bit_hex(partial_offset_int), param_offset)
 
 def get_drum_partial_address(track, pad, param_offset):
-    # Verified Drum Bases: Track 1 (32 40 00 00), Track 2 (32 73 00 00)
-    # Calculated Gap: 0x33 in the second byte.
     drum_bases = {1: 0x32400000, 2: 0x32730000, 3: 0x33260000, 4: 0x33590000}
     base = drum_bases.get(track, 0x32400000)
     pad_key = PAD_NOTES[pad - 1]
-    # Spacing is 0x0100 (128 bytes). Key 21 starts at 0x1600.
-    # Logic: Note 37 (C#1) = 37-21 = 16. Offset = 0x1600 + (16 * 128) = 0x2600.
     pad_offset_int = to_7bit_int(0x001600) + (pad_key - 21) * 128
     return add_roland_address(base, to_7bit_hex(pad_offset_int), param_offset)
 
-def get_long_parameter_name(label):
-    if label is None:
-        return "Parameter"
-    key = str(label).strip()
-    return PARAMETER_LONG_NAMES.get(key, key or "Parameter")
-
-
+# --- HUD HELPERS ---
 def get_value_text(value=None, text=None):
     if text is not None:
         return str(text)
@@ -346,78 +410,199 @@ def get_value_text(value=None, text=None):
         return str(last_edited_val)
     return ""
 
-
 def get_edit_target_path(preset_name):
+    preset_data = PRESETS.get(active_preset, {})
+    context = preset_data.get("context", "none")
     parts = [preset_name]
-    if active_preset in (PRESET_4, PRESET_5, PRESET_6):
-        parts.append(f"T{active_track:02d}")
-    if active_preset == PRESET_6:
-        parts.append(f"P{active_partial:02d}")
-    elif active_preset == PRESET_5:
-        parts.append(f"PD{active_pad:02d}")
-    return " > ".join(parts)
 
+    if context in ("track", "partial", "drum"):
+        parts.append(f"T{active_track:02d}")
+
+    if context == "partial":
+        parts.append(f"P{active_partial:02d}")
+    elif context == "drum":
+        parts.append(f"PD{active_pad:02d}")
+
+    return " > ".join(parts)
 
 def build_preset_line1():
     return PRESETS.get(active_preset, {}).get("name", "NONE")
-
 
 def build_scene_line1():
     preset_data = PRESETS.get(active_preset, {})
     scene_data = preset_data.get("scenes", {}).get(active_scene, {})
     return f"{preset_data.get('name', 'NONE')} > {scene_data.get('name', f'S{active_scene}')}"
 
-
-def build_edit_line1(label=None, value=None, text=None):
+def build_edit_line1(label=None, value=None, text=None, name=None):
     preset_name = PRESETS.get(active_preset, {}).get("name", "NONE")
-    param_name = get_long_parameter_name(label if label is not None else last_edited_label)
+    parameter_name = name or last_edited_name or label or "Parameter"
     value_text = get_value_text(value=value, text=text)
     base = get_edit_target_path(preset_name)
+
     if value_text:
-        return f"{base} > {param_name}: {value_text}"
-    return f"{base} > {param_name}"
+        return f"{base} > {parameter_name}: {value_text}"
+    return f"{base} > {parameter_name}"
 
-def get_mapping_label(m):
-    if not m: return "---"
-    out_type = m[0]
-    if out_type in ["conditional_sysex", "conditional_sysex_track"]:
-        cond_val = param_states.get((active_track, 'track', m[1]), param_states.get((active_track, active_partial, m[1]), 0))
-        target = m[2].get(cond_val)
-        if target:
-            if target[0] == "bank_dependent":
-                bank_val = param_states.get((active_track, 'track', ("cc", 2)), param_states.get((active_track, active_partial, ("cc", 2)), 8))
-                res = target[1].get(bank_val)
-                return res[2] if res else "---"
-            return target[2]
-        return "---"
-    elif out_type in ["track_select", "partial_select"]: return m[2]
-    elif out_type == "drum_sysex_partial": return m[3]
-    elif out_type == "drum_pad_select": return f"PD{(active_pad_bank * 4 + m[1]):02d}"
-    elif out_type == "drum_pad_bank": return m[2]
-    for item in m[3:]:
-        if isinstance(item, str) and item != "toggle": return item
-    return "---"
+def describe_input(lookup_key, value=None, is_press=True):
+    kind, number = lookup_key
+    if kind == "cc":
+        if value is not None:
+            return f"CC {number}: {value}"
+        return f"CC {number}"
+    state = "ON" if is_press else "OFF"
+    return f"Note {number}: {state}"
 
-def schedule_matrix_swap(p_num, s_num, t_time):
-    time.sleep(2.5)
-    if active_preset == p_num and active_scene == s_num and last_interaction_time <= t_time:
-        global last_touched_type
-        last_touched_type = "note"; update_overlay()
-
-def clear_overlay():
+def write_overlay_text(overlay_text):
     if os.path.exists(OVERLAY_PIPE):
         try:
             fd = os.open(OVERLAY_PIPE, os.O_WRONLY | os.O_NONBLOCK)
-            os.write(fd, b" \n"); os.close(fd)
-        except: pass
+            os.write(fd, overlay_text.encode())
+            os.close(fd)
+        except OSError:
+            pass
 
-def update_overlay():
+def clear_overlay():
+    # Send a blank overlay message. Requires render.c to treat empty/blank
+    # overlay data as inactive, otherwise the background can still be drawn.
+    write_overlay_text("\n")
+
+def display_values_enabled():
+    return PRESETS.get(active_preset, {}).get("display_values", True)
+
+def is_matrix_control(lookup_key):
+    """Return True for controls in the current 9x2 matrix.
+
+    For scene 1 this is CC/Note 0-17. For scene 2 this is CC/Note 18-35,
+    matching the existing scene offset logic used by the HUD matrix.
+    """
+    kind, number = lookup_key
+    if kind not in ("cc", "note"):
+        return False
+    offset = (active_scene - 1) * 18
+    return offset <= number < offset + 18
+
+def get_condition_value(condition_key, track_level=False):
+    if track_level:
+        return param_states.get((active_track, "track", condition_key), 0)
+    return param_states.get(
+        (active_track, "track", condition_key),
+        param_states.get((active_track, active_partial, condition_key), 0)
+    )
+
+def resolve_conditional_target(mapping):
+    clean_mapping = strip_mapping_metadata(mapping)
+    out_type = clean_mapping[0]
+    condition_key = clean_mapping[1]
+    condition_map = clean_mapping[2]
+
+    cond_val = get_condition_value(condition_key, track_level=(out_type == "conditional_sysex_track"))
+    target = condition_map.get(cond_val)
+
+    if not target:
+        return None
+
+    clean_target = strip_mapping_metadata(target)
+    if clean_target and clean_target[0] == "bank_dependent":
+        bank_val = param_states.get(
+            (active_track, "track", ("cc", 2)),
+            param_states.get((active_track, active_partial, ("cc", 2)), 8)
+        )
+        target = clean_target[1].get(bank_val)
+
+    return target
+
+def get_mapping_label(mapping):
+    if not mapping:
+        return "---"
+
+    clean_mapping = strip_mapping_metadata(mapping)
+    out_type = clean_mapping[0]
+
+    if out_type in ["conditional_sysex", "conditional_sysex_track"]:
+        target = resolve_conditional_target(mapping)
+        if not target:
+            return "---"
+        clean_target = strip_mapping_metadata(target)
+        return clean_target[2] if len(clean_target) > 2 else "---"
+
+    if out_type in ["track_select", "partial_select"]:
+        return clean_mapping[2]
+    if out_type == "drum_sysex_partial":
+        return clean_mapping[3]
+    if out_type == "drum_pad_select":
+        return f"PD{(active_pad_bank * 4 + clean_mapping[1]):02d}"
+    if out_type == "drum_pad_bank":
+        return clean_mapping[2]
+
+    for item in clean_mapping[3:]:
+        if isinstance(item, str) and item != "toggle":
+            return item
+    return "---"
+
+def get_mapping_name(mapping, fallback=None):
+    return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
+
+def get_target_fields(mapping, out_type):
+    clean_mapping = strip_mapping_metadata(mapping)
+
+    if out_type in ["sysex", "sysex_track", "drum_sysex_partial"]:
+        return clean_mapping[1:], get_configured_parameter_name(mapping, clean_mapping[3])
+
+    if out_type == "dynamic_sysex_track":
+        fields = (
+            clean_mapping[1].get(active_partial, 0),
+            clean_mapping[2],
+            clean_mapping[3],
+        ) + clean_mapping[4:]
+        return fields, get_configured_parameter_name(mapping, clean_mapping[3])
+
+    if out_type in ["conditional_sysex", "conditional_sysex_track"]:
+        target = resolve_conditional_target(mapping)
+        if not target:
+            return None, None
+        clean_target = strip_mapping_metadata(target)
+        return clean_target, get_configured_parameter_name(target, clean_target[2] if len(clean_target) > 2 else None)
+
+    return None, None
+
+def parse_target_fields(fields, long_name):
+    if not fields or fields[0] is None:
+        return None
+
+    offsets = fields[0] if isinstance(fields[0], list) else [fields[0]]
+    max_value = fields[1]
+    label = fields[2]
+    size = fields[3] if len(fields) > 3 else 1
+
+    value_list = None
+    text_map = None
+    for item in fields[4:]:
+        if isinstance(item, list):
+            value_list = item
+        elif is_value_map_dict(item):
+            text_map = item
+
+    return offsets, max_value, label, size, value_list, text_map, long_name or label
+
+def update_overlay(force_preset_name=False):
     preset_data = PRESETS.get(active_preset, {})
-    scene_data = preset_data.get("scenes", {}).get(active_scene, {})
-    p_name = preset_data.get("name", "NONE")
-    l1 = current_line1 or p_name
+    line1 = current_line1 or preset_data.get("name", "NONE")
 
-    mappings, all_labels, offset = scene_data.get("mappings", {}), [], (active_scene - 1) * 18
+    if not preset_data.get("display_values", True):
+        if force_preset_name:
+            # Preset selection should still be acknowledged on the HUD, even
+            # when normal value/matrix display is disabled for that preset.
+            write_overlay_text(f"{line1.ljust(45)}~~\n")
+        else:
+            clear_overlay()
+        return
+
+    scene_data = preset_data.get("scenes", {}).get(active_scene, {})
+
+    mappings = scene_data.get("mappings", {})
+    all_labels = []
+    offset = (active_scene - 1) * 18
+
     for i in range(18):
         key = (last_touched_type, i + offset)
         label = get_mapping_label(mappings.get(key))
@@ -425,114 +610,408 @@ def update_overlay():
         all_labels.append(core_str)
 
     sep = " | " if last_touched_type == "cc" else " : "
-    overlay_text = f"{l1.ljust(45)}~{sep.join(all_labels[:9]).ljust(55)}~{sep.join(all_labels[9:18]).ljust(55)}\n"
-    if os.path.exists(OVERLAY_PIPE):
-        try:
-            fd = os.open(OVERLAY_PIPE, os.O_WRONLY | os.O_NONBLOCK)
-            os.write(fd, overlay_text.encode()); os.close(fd)
-        except: pass
+    overlay_text = f"{line1.ljust(45)}~{sep.join(all_labels[:9]).ljust(55)}~{sep.join(all_labels[9:18]).ljust(55)}\n"
+    write_overlay_text(overlay_text)
 
-def main():
+# --- PRESET AND TRANSPORT HANDLING ---
+def remember_output_note(channel, note):
+    ignored_output_notes[(channel, note)] = time.time() + LOOPBACK_IGNORE_SECONDS
+
+def remember_output_note_on(channel, note):
+    output_notes_held.add((channel, note))
+    remember_output_note(channel, note)
+
+def remember_output_note_off(channel, note):
+    output_notes_held.discard((channel, note))
+    remember_output_note(channel, note)
+
+def is_ignored_output_note(msg):
+    if msg.type not in ("note_on", "note_off"):
+        return False
+
+    key = (getattr(msg, "channel", None), msg.note)
+    now = time.time()
+
+    if key in output_notes_held:
+        return True
+
+    expiry = ignored_output_notes.get(key, 0)
+    if expiry and now <= expiry:
+        return True
+    if expiry:
+        ignored_output_notes.pop(key, None)
+    return False
+
+def send_m8_button_down(out_port, channel, note, velocity=127):
+    """Hold an M8 button down until its matching release arrives.
+
+    This is required for M8 key combinations, for example Shift + Left,
+    and for cursor key repeat when an arrow button is held.
+    """
+    remember_output_note_on(channel, note)
+    out_port.send(mido.Message("note_on", channel=channel, note=note, velocity=velocity))
+
+def send_m8_button_up(out_port, channel, note):
+    remember_output_note_off(channel, note)
+    out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
+
+def send_navigation_note_off(out_port, channel, note):
+    send_m8_button_up(out_port, channel, note)
+
+def release_all_navigation_notes(out_port):
+    # Safety release for all M8 button notes used by this script.
+    stop_all_arrow_repeats(out_port)
+    for note in range(8):
+        send_m8_button_up(out_port, M8_CHANNEL, note)
+
+def send_note_pulse(out_port, channel, note, velocity=127):
+    """Send one short M8 button press: note-on followed by note-off."""
+    send_m8_button_down(out_port, channel, note, velocity)
+    time.sleep(SELECTOR_NOTE_PULSE_SECONDS)
+    send_m8_button_up(out_port, channel, note)
+
+def arrow_repeat_worker(out_port, control, channel, note, stop_event):
+    """Emulate the M8 hardware arrow-key repeat while a selector is held.
+
+    The M8 responds reliably to short note pulses. Holding a MIDI note does not
+    always trigger repeat, so arrows are pulsed repeatedly. Modifier buttons
+    such as Shift/Edit/Option stay held independently, allowing combos such as
+    Shift + Left to repeat correctly.
+    """
+    send_note_pulse(out_port, channel, note)
+
+    if stop_event.wait(ARROW_REPEAT_INITIAL_DELAY_SECONDS):
+        return
+
+    while not stop_event.is_set():
+        send_note_pulse(out_port, channel, note)
+        if stop_event.wait(ARROW_REPEAT_INTERVAL_SECONDS):
+            break
+
+def start_arrow_repeat(out_port, control, channel, note):
+    with arrow_repeat_lock:
+        existing = arrow_repeat_stops.get(control)
+        if existing is not None and not existing.is_set():
+            return
+
+        stop_event = threading.Event()
+        arrow_repeat_stops[control] = stop_event
+
+    thread = threading.Thread(
+        target=arrow_repeat_worker,
+        args=(out_port, control, channel, note, stop_event),
+        daemon=True,
+    )
+    thread.start()
+
+def stop_arrow_repeat(out_port, control, channel, note):
+    with arrow_repeat_lock:
+        stop_event = arrow_repeat_stops.pop(control, None)
+        if stop_event is not None:
+            stop_event.set()
+
+    # Safety release in case the M8 or ALSA saw a held note from an earlier run.
+    send_m8_button_up(out_port, channel, note)
+
+def stop_all_arrow_repeats(out_port):
+    for control, (note, _name) in PRESET_SELECTOR_NOTES.items():
+        stop_arrow_repeat(out_port, control, M8_CHANNEL, note)
+
+def handle_selector_cc(out_port, control, value, suppress_navigation=False):
+    """Handle one of the four selector/navigation CCs.
+
+    Arrow buttons behave like the M8 hardware buttons: one step immediately,
+    then repeated steps while held. Modifier buttons are handled separately as
+    true held notes, so combinations such as Shift + Left work.
+
+    No standalone HUD feedback is generated here.
+    """
+    note, _name = PRESET_SELECTOR_NOTES[control]
+
+    if value > 0:
+        if suppress_navigation:
+            # A preset combo should not also move the M8 cursor.
+            stop_arrow_repeat(out_port, control, M8_CHANNEL, note)
+            return
+        start_arrow_repeat(out_port, control, M8_CHANNEL, note)
+        return
+
+    stop_arrow_repeat(out_port, control, M8_CHANNEL, note)
+
+def select_preset(preset_number, out_port=None):
     global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
-    global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time, current_line1
+    global last_edited_label, last_edited_name, last_edited_val, last_edited_text, current_line1
+
+    active_preset = preset_number
+    preset_data = PRESETS.get(active_preset, {})
+
+    if active_scene not in preset_data.get("scenes", {}):
+        active_scene = 1
+
+    if "default_track" in preset_data:
+        active_track = preset_data["default_track"]
+
+    active_partial = 1
+    active_pad = 1
+    active_pad_bank = 0
+
+    last_edited_label = None
+    last_edited_name = None
+    last_edited_val = None
+    last_edited_text = None
+    if out_port is not None:
+        release_all_navigation_notes(out_port)
+    current_line1 = build_preset_line1()
+    update_overlay(force_preset_name=True)
+
+def handle_preset_selection_cc(msg, out_port):
+    global preset_prefix, preset_prefix_time, current_line1
+    global last_edited_label, last_edited_name, last_edited_val, last_edited_text, last_touched_type
+
+    if msg.type != "control_change":
+        return False
+
+    now = time.time()
+    control = msg.control
+    is_press = msg.value > 0
+
+    if control in (PRESET_PREFIX_PRIMARY, PRESET_PREFIX_SECONDARY):
+        if is_press:
+            preset_prefix = control
+            preset_prefix_time = now
+        return True
+
+    if control in PRESET_SELECTOR_NOTES:
+        combo = (preset_prefix, control)
+        prefix_is_valid = preset_prefix is not None and (now - preset_prefix_time) <= PRESET_PREFIX_TIMEOUT
+        combo_is_valid = is_press and prefix_is_valid and combo in PRESET_COMBOS
+
+        # These four selector/navigation buttons should not show standalone HUD
+        # feedback. They only update the HUD when they complete a preset combo.
+        # When used as a preset combo, suppress the navigation pulse so changing
+        # presets does not also move the M8 cursor.
+        handle_selector_cc(out_port, control, msg.value, suppress_navigation=combo_is_valid)
+
+        if combo_is_valid:
+            preset_prefix = None
+            select_preset(PRESET_COMBOS[combo], out_port)
+
+        return True
+
+    if preset_prefix is not None and (now - preset_prefix_time) > PRESET_PREFIX_TIMEOUT:
+        preset_prefix = None
+
+    return False
+
+def schedule_matrix_swap(preset_number, scene_number, trigger_time):
+    time.sleep(2.5)
+    if active_preset == preset_number and active_scene == scene_number and last_interaction_time <= trigger_time:
+        global last_touched_type
+        last_touched_type = "note"
+        update_overlay()
+
+# --- MAIN MIDI ROUTER ---
+def main():
+    global active_scene, active_track, active_partial, active_pad, active_pad_bank
+    global last_edited_label, last_edited_name, last_edited_val, last_edited_text
+    global last_sysex_time, last_touched_type, last_interaction_time, current_line1
+
     try:
-        in_port = mido.open_input('In', virtual=True, client_name='nanoRouterIN')
-        out_port = mido.open_output('Out', virtual=True, client_name='nanoRouterOUT')
-    except Exception as e: sys.exit(f"Failed: {e}")
+        in_port = mido.open_input("In", virtual=True, client_name="nanoRouterIN")
+        out_port = mido.open_output("Out", virtual=True, client_name="nanoRouterOUT")
+    except Exception as exc:
+        sys.exit(f"Failed: {exc}")
+
+    if out_port is not None:
+        release_all_navigation_notes(out_port)
     current_line1 = build_preset_line1()
     update_overlay()
 
     def midi_callback(msg):
-        global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
-        global last_edited_label, last_edited_val, last_edited_text, last_sysex_time, toggle_states, param_states, last_touched_type, last_interaction_time, current_line1
-        if msg.type == 'sysex' and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
-            active_scene = msg.data[8] + 1; current_line1 = build_scene_line1(); update_overlay(); return
-        if msg.type == 'control_change' and msg.control in PRESETS:
-            if msg.value > 0:
-                active_preset = msg.control
-                p_info, last_edited_label, last_edited_val, last_edited_text = PRESETS.get(active_preset, {}), None, None, None
-                if active_scene not in p_info.get("scenes", {}):
-                    active_scene = 1
-                current_line1 = build_preset_line1()
-                t_trigger = time.time(); last_interaction_time = t_trigger
-                if not p_info.get("display_values", True):
-                    last_touched_type = "cc"
-                    threading.Thread(target=schedule_matrix_swap, args=(active_preset, active_scene, t_trigger), daemon=True).start()
-                update_overlay(); return
-        if msg.type == 'control_change': lookup_key, val, last_touched_type = ("cc", msg.control), msg.value, "cc"
-        elif msg.type in ['note_on', 'note_off']: lookup_key, val, last_touched_type = ("note", msg.note), getattr(msg, 'velocity', 0), "note"
-        else: return
-        is_press = (val > 0 if msg.type != 'note_off' else False)
+        global active_scene, active_track, active_partial, active_pad, active_pad_bank
+        global last_edited_label, last_edited_name, last_edited_val, last_edited_text
+        global last_sysex_time, last_touched_type, last_interaction_time, current_line1
+
+        if msg.type == "sysex" and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
+            active_scene = msg.data[8] + 1
+            current_line1 = build_scene_line1()
+            update_overlay()
+            return
+
+        if is_ignored_output_note(msg):
+            return
+
+        if msg.type == "control_change" and handle_preset_selection_cc(msg, out_port):
+            return
+
+        if msg.type == "control_change":
+            lookup_key, val, last_touched_type = ("cc", msg.control), msg.value, "cc"
+        elif msg.type in ["note_on", "note_off"]:
+            lookup_key, val, last_touched_type = ("note", msg.note), getattr(msg, "velocity", 0), "note"
+        else:
+            return
+
+        is_press = val > 0 if msg.type != "note_off" else False
         last_interaction_time = time.time()
-        p_info = PRESETS.get(active_preset, {})
-        mappings = p_info.get("scenes", {}).get(active_scene, {}).get("mappings", {})
-        if lookup_key in mappings:
-            m = mappings[lookup_key]; out_type = m[0]; is_track_level = out_type in ["sysex_track", "dynamic_sysex_track", "conditional_sysex_track"]
-            if is_toggle := ("toggle" in m):
-                if not is_press: return
-                if out_type == "dynamic_sysex_track": s_key = (active_preset, active_scene, lookup_key, active_partial)
-                elif out_type == "drum_sysex_partial": s_key = (active_preset, active_scene, lookup_key, active_pad)
-                elif is_track_level: s_key = (active_preset, active_scene, lookup_key, 'track')
-                else: s_key = (active_preset, active_scene, lookup_key, active_partial)
-                new_state = not toggle_states.get(s_key, False)
-                toggle_states[s_key] = new_state; val = 127 if new_state else 0
-            if out_type == "track_select" and is_press:
-                active_track, last_edited_label, last_edited_val, last_edited_text = m[1], "TRK", None, m[2]
-                current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
-                update_overlay(); return
-            if out_type == "partial_select" and is_press:
-                active_partial, last_edited_label, last_edited_val, last_edited_text = m[1], "PAR", None, m[2]
-                current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
-                update_overlay(); return
-            if out_type == "drum_pad_select":
-                c_pad = active_pad_bank * 4 + m[1]; p_key = PAD_NOTES[c_pad - 1]
-                if is_press:
-                    active_pad, last_edited_label, last_edited_val, last_edited_text = c_pad, "PAD", None, f"PD{c_pad:02d}"
-                    current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
-                    out_port.send(mido.Message('note_on', channel=active_track - 1, note=p_key, velocity=val))
-                    update_overlay(); return
-                else: out_port.send(mido.Message('note_off', channel=active_track - 1, note=p_key, velocity=0)); return
-            if out_type == "drum_pad_bank" and is_press:
-                active_pad_bank, last_edited_label, last_edited_val, last_edited_text = (active_pad_bank + m[1]) % 4, "PBK", None, m[2]
-                current_line1 = build_edit_line1(last_edited_label, value=last_edited_val, text=last_edited_text)
-                update_overlay(); return
-            if out_type in ["sysex", "conditional_sysex", "sysex_track", "dynamic_sysex_track", "conditional_sysex_track", "drum_sysex_partial"]:
-                if out_type in ["sysex", "sysex_track"]: target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
-                elif out_type == "dynamic_sysex_track": target = (m[1].get(active_partial, 0), m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
-                elif out_type == "drum_sysex_partial": target = (m[1], m[2], m[3], m[4] if len(m) > 4 else 1, m[5] if len(m) > 5 and isinstance(m[5], list) else None, m[6] if len(m) > 6 and isinstance(m[6], dict) else (m[5] if len(m) > 5 and isinstance(m[5], dict) else None))
-                else:
-                    cv = param_states.get((active_track, 'track', m[1]), param_states.get((active_track, active_partial, m[1]), 0))
-                    target = m[2].get(cv)
-                    if target and target[0] == "bank_dependent": target = target[1].get(param_states.get((active_track, 'track', ("cc", 2)), 8))
-                if not target or target[0] is None: return
-                offs, max_v, lbl, size, v_list, t_map = (target[0] if isinstance(target[0], list) else [target[0]]), target[1], target[2], target[3], (target[4] if len(target) > 4 else None), (target[5] if len(target) > 5 else None)
-                now = time.time()
-                if is_toggle or (now - last_sysex_time) > 0.08:
-                    f_val = v_list[int(round((val/127.0)*max_v))] if v_list else int(round((val/127.0)*max_v))
-                    param_states[(active_track, (f"P{active_pad}" if out_type == "drum_sysex_partial" else ('track' if is_track_level else active_partial)), lookup_key)] = f_val
-                    for o in offs:
-                        if out_type == "drum_sysex_partial": addr = get_drum_partial_address(active_track, active_pad, o)
-                        else: addr = get_mc101_address(active_track, (1 if is_track_level else active_partial), o)
-                        send_sysex(out_port, addr, f_val, size)
-                    if lbl in ["BNK", "WNO"]: send_sysex(out_port, get_mc101_address(active_track, active_partial, 0x1B), 0, 1)
-                    last_sysex_time, last_edited_label, last_edited_val, last_edited_text = now, lbl, f_val, (t_map.get(f_val) if t_map else None)
-                    current_line1 = build_edit_line1(lbl, value=last_edited_val, text=last_edited_text)
-                    update_overlay()
+
+        preset_data = PRESETS.get(active_preset, {})
+        scene_data = preset_data.get("scenes", {}).get(active_scene, {})
+        mappings = scene_data.get("mappings", {})
+
+        if lookup_key not in mappings:
+            if display_values_enabled() and is_matrix_control(lookup_key) and (msg.type == "control_change" or is_press):
+                current_line1 = f"{build_preset_line1()} > {describe_input(lookup_key, value=val, is_press=is_press)}"
+                update_overlay()
+            elif not display_values_enabled():
+                clear_overlay()
+            return
+
+        mapping = mappings[lookup_key]
+        clean_mapping = strip_mapping_metadata(mapping)
+        out_type = clean_mapping[0]
+        is_track_level = out_type in ["sysex_track", "dynamic_sysex_track", "conditional_sysex_track"]
+        is_toggle = "toggle" in clean_mapping
+
+        if is_toggle:
+            if not is_press:
+                return
+
+            if out_type == "dynamic_sysex_track":
+                state_key = (active_preset, active_scene, lookup_key, active_partial)
+            elif out_type == "drum_sysex_partial":
+                state_key = (active_preset, active_scene, lookup_key, active_pad)
+            elif is_track_level:
+                state_key = (active_preset, active_scene, lookup_key, "track")
             else:
-                lbl = get_mapping_label(m)
-                if out_type == "note": out_port.send(mido.Message('note_on' if val > 0 else 'note_off', channel=m[1], note=m[2], velocity=val))
-                elif out_type == "cc": out_port.send(mido.Message('control_change', channel=m[1], control=m[2], value=val))
-                if msg.type == 'control_change' or is_press or is_toggle:
-                    last_edited_label = lbl
-                    last_edited_val = val if out_type == "cc" else None
-                    last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
-                    current_line1 = build_edit_line1(lbl, value=last_edited_val, text=last_edited_text)
-                    update_overlay()
+                state_key = (active_preset, active_scene, lookup_key, active_partial)
+
+            new_state = not toggle_states.get(state_key, False)
+            toggle_states[state_key] = new_state
+            val = 127 if new_state else 0
+
+        if out_type == "track_select" and is_press:
+            active_track = clean_mapping[1]
+            last_edited_label = clean_mapping[2]
+            last_edited_name = get_mapping_name(mapping, "Track")
+            last_edited_val = None
+            last_edited_text = clean_mapping[2]
+            current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+            update_overlay()
+            return
+
+        if out_type == "partial_select" and is_press:
+            active_partial = clean_mapping[1]
+            last_edited_label = clean_mapping[2]
+            last_edited_name = get_mapping_name(mapping, "Partial")
+            last_edited_val = None
+            last_edited_text = clean_mapping[2]
+            current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+            update_overlay()
+            return
+
+        if out_type == "drum_pad_select":
+            selected_pad = active_pad_bank * 4 + clean_mapping[1]
+            pad_note = PAD_NOTES[selected_pad - 1]
+
+            if is_press:
+                active_pad = selected_pad
+                last_edited_label = f"PD{selected_pad:02d}"
+                last_edited_name = get_mapping_name(mapping, "Pad")
+                last_edited_val = None
+                last_edited_text = f"PD{selected_pad:02d}"
+                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                out_port.send(mido.Message("note_on", channel=active_track - 1, note=pad_note, velocity=val))
+                update_overlay()
+            else:
+                out_port.send(mido.Message("note_off", channel=active_track - 1, note=pad_note, velocity=0))
+            return
+
+        if out_type == "drum_pad_bank" and is_press:
+            active_pad_bank = (active_pad_bank + clean_mapping[1]) % 4
+            last_edited_label = clean_mapping[2]
+            last_edited_name = get_mapping_name(mapping, "Pad Bank")
+            last_edited_val = None
+            last_edited_text = clean_mapping[2]
+            current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+            update_overlay()
+            return
+
+        if out_type in ["sysex", "conditional_sysex", "sysex_track", "dynamic_sysex_track", "conditional_sysex_track", "drum_sysex_partial"]:
+            target_fields, target_name = get_target_fields(mapping, out_type)
+            target = parse_target_fields(target_fields, target_name)
+
+            if not target:
+                return
+
+            offsets, max_value, label, size, value_list, text_map, long_name = target
+            now = time.time()
+
+            if is_toggle or (now - last_sysex_time) > 0.08:
+                if value_list:
+                    f_val = value_list[int(round((val / 127.0) * (len(value_list) - 1)))]
+                else:
+                    f_val = int(round((val / 127.0) * max_value))
+
+                state_context = f"P{active_pad}" if out_type == "drum_sysex_partial" else ("track" if is_track_level else active_partial)
+                param_states[(active_track, state_context, lookup_key)] = f_val
+
+                for offset in offsets:
+                    if out_type == "drum_sysex_partial":
+                        address = get_drum_partial_address(active_track, active_pad, offset)
+                    else:
+                        address = get_mc101_address(active_track, 1 if is_track_level else active_partial, offset)
+                    send_sysex(out_port, address, f_val, size)
+
+                if label in ["BNK", "WNO"]:
+                    send_sysex(out_port, get_mc101_address(active_track, active_partial, 0x1B), 0, 1)
+
+                last_sysex_time = now
+                last_edited_label = label
+                last_edited_name = long_name
+                last_edited_val = f_val
+                last_edited_text = text_map.get(f_val) if text_map else None
+                current_line1 = build_edit_line1(label, value=last_edited_val, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
+        label = get_mapping_label(mapping)
+        mapping_name = get_mapping_name(mapping, label)
+
+        if out_type == "note":
+            out_port.send(mido.Message("note_on" if val > 0 else "note_off", channel=clean_mapping[1], note=clean_mapping[2], velocity=val))
+        elif out_type == "note_pulse":
+            if is_press:
+                send_note_pulse(out_port, clean_mapping[1], clean_mapping[2])
+            else:
+                send_navigation_note_off(out_port, clean_mapping[1], clean_mapping[2])
+        elif out_type == "m8_button":
+            if is_press:
+                send_m8_button_down(out_port, clean_mapping[1], clean_mapping[2])
+            else:
+                send_m8_button_up(out_port, clean_mapping[1], clean_mapping[2])
+        elif out_type == "cc":
+            out_port.send(mido.Message("control_change", channel=clean_mapping[1], control=clean_mapping[2], value=val))
+
+        if msg.type == "control_change" or is_press or is_toggle:
+            last_edited_label = label
+            last_edited_name = mapping_name
+            last_edited_val = val if out_type == "cc" else None
+            last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
+            current_line1 = build_edit_line1(label, value=last_edited_val, text=last_edited_text, name=last_edited_name)
+            update_overlay()
 
     in_port.callback = midi_callback
-    try:
-        while True: time.sleep(1) 
-    except KeyboardInterrupt: pass
-    finally: in_port.close(); out_port.close()
 
-if __name__ == "__main__": main()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if out_port is not None:
+            release_all_navigation_notes(out_port)
+        in_port.close()
+        out_port.close()
+
+if __name__ == "__main__":
+    main()
