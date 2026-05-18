@@ -124,33 +124,48 @@ def get_configured_parameter_name(mapping, fallback=None):
 
 PRESETS = {
     PRESET_1: {
-        "name": "M8 PERFORMANCE",
+        "name": "M8 & MC-101",
         "context": "m8",
         "display_values": False,
         "scenes": {
             1: {
-                "name": "MIXER",
+                "name": "CONTROLLER",
                 "mappings": {
-                    ("cc", 0): named(("cc", M8_CHANNEL, 1, "001"), "CC 001"),
-                    ("cc", 1): named(("cc", M8_CHANNEL, 2, "002"), "CC 002"),
-                    ("note", 0): named(("note", M8_CHANNEL, 12, "toggle", "M01"), "M8 Macro 01"),
-                    ("note", 1): named(("note", M8_CHANNEL, 13, "toggle", "M02"), "M8 Macro 02"),
 
                     # Requested Preset 1 M8 button mappings. MIDI note numbers use C-1 = 0.
                     # Physical G-1/G#-1/E0/F0 send short M8 button pulses.
-                    ("note", 7): named(("m8_button", M8_CHANNEL, 3, "Option"), "Option"),
-                    ("note", 8): named(("m8_button", M8_CHANNEL, 2, "Edit"), "Edit"),
-                    ("note", 16): named(("m8_button", M8_CHANNEL, 1, "Shift"), "Shift"),
-                    ("note", 17): named(("m8_button", M8_CHANNEL, 0, "Play"), "Play"),
+                    ("note", 7): named(("m8_button", M8_CHANNEL, 3, "OPT"), "Option"),
+                    ("note", 8): named(("m8_button", M8_CHANNEL, 2, "EDI"), "Edit"),
+                    ("note", 16): named(("m8_button", M8_CHANNEL, 1, "SHI"), "Shift"),
+                    ("note", 17): named(("m8_button", M8_CHANNEL, 0, "PLA"), "Play"),
+
+                    # MC-101 transport controls.
+                    # MIDI note numbers use C-1 = 0:
+                    #   C-1 = 0  -> MIDI Stop
+                    #   A-1  = 9 -> MIDI Start
+                    ("note", 0): named(("midi_transport", "stop", "STOP", "MST"), "MC-101 Stop"),
+                    ("note", 9): named(("midi_transport", "start", "START", "MPL"), "MC-101 Play"),
                 }
             }
         }
     },
     PRESET_2: {
-        "name": "EMPTY",
+        "name": "M8",
         "context": "none",
         "display_values": False,
-        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+        "scenes": {
+            1: {
+                "name": "MIXER",
+                "mappings": {
+
+                    ("cc", 0): named(("cc", M8_CHANNEL, 1, "001"), "CC 001"),
+                    ("cc", 1): named(("cc", M8_CHANNEL, 2, "002"), "CC 002"),
+                    ("note", 0): named(("note", M8_CHANNEL, 12, "toggle", "M01"), "M8 Macro 01"),
+                    ("note", 1): named(("note", M8_CHANNEL, 13, "toggle", "M02"), "M8 Macro 02"),
+
+                }
+            }
+        }
     },
     PRESET_3: {
         "name": "EMPTY",
@@ -584,34 +599,53 @@ def parse_target_fields(fields, long_name):
 
     return offsets, max_value, label, size, value_list, text_map, long_name or label
 
-def update_overlay(force_preset_name=False):
+def build_matrix_labels(control_type=None, highlight_current=True):
+    scene_data = PRESETS.get(active_preset, {}).get("scenes", {}).get(active_scene, {})
+    mappings = scene_data.get("mappings", {})
+    labels = []
+    offset = (active_scene - 1) * 18
+    matrix_type = control_type or last_touched_type
+
+    for i in range(18):
+        key = (matrix_type, i + offset)
+        label = get_mapping_label(mappings.get(key))
+        if highlight_current and label == last_edited_label:
+            core_str = ">X<"
+        else:
+            core_str = str(label).strip()[:3].upper().ljust(3, " ")
+        labels.append(core_str)
+
+    return labels
+
+
+def write_overlay_matrix(line1, labels, separator):
+    overlay_text = (
+        f"{line1.ljust(45)}~"
+        f"{separator.join(labels[:9]).ljust(55)}~"
+        f"{separator.join(labels[9:18]).ljust(55)}\n"
+    )
+    write_overlay_text(overlay_text)
+
+
+def update_overlay(force_title=False):
     preset_data = PRESETS.get(active_preset, {})
     line1 = current_line1 or preset_data.get("name", "NONE")
 
-    if not preset_data.get("display_values", True):
-        if force_preset_name:
-            # Preset selection should still be acknowledged on the HUD, even
-            # when normal value/matrix display is disabled for that preset.
-            write_overlay_text(f"{line1.ljust(45)}~~\n")
-        else:
-            clear_overlay()
+    if force_title:
+        # Preset and scene selection should briefly show the title plus the
+        # buttons available in the current scene, even when display_values is
+        # disabled for normal parameter/button feedback.
+        button_labels = build_matrix_labels(control_type="note", highlight_current=False)
+        write_overlay_matrix(line1, button_labels, " : ")
         return
 
-    scene_data = preset_data.get("scenes", {}).get(active_scene, {})
+    if not preset_data.get("display_values", True):
+        clear_overlay()
+        return
 
-    mappings = scene_data.get("mappings", {})
-    all_labels = []
-    offset = (active_scene - 1) * 18
-
-    for i in range(18):
-        key = (last_touched_type, i + offset)
-        label = get_mapping_label(mappings.get(key))
-        core_str = ">X<" if label == last_edited_label else str(label).strip()[:3].upper().ljust(3, " ")
-        all_labels.append(core_str)
-
+    labels = build_matrix_labels()
     sep = " | " if last_touched_type == "cc" else " : "
-    overlay_text = f"{line1.ljust(45)}~{sep.join(all_labels[:9]).ljust(55)}~{sep.join(all_labels[9:18]).ljust(55)}\n"
-    write_overlay_text(overlay_text)
+    write_overlay_matrix(line1, labels, sep)
 
 # --- PRESET AND TRANSPORT HANDLING ---
 def remember_output_note(channel, note):
@@ -745,7 +779,12 @@ def select_preset(preset_number, out_port=None):
     active_preset = preset_number
     preset_data = PRESETS.get(active_preset, {})
 
-    if active_scene not in preset_data.get("scenes", {}):
+    scenes = preset_data.get("scenes", {})
+    if 1 in scenes:
+        active_scene = 1
+    elif scenes:
+        active_scene = sorted(scenes.keys())[0]
+    else:
         active_scene = 1
 
     if "default_track" in preset_data:
@@ -761,8 +800,8 @@ def select_preset(preset_number, out_port=None):
     last_edited_text = None
     if out_port is not None:
         release_all_navigation_notes(out_port)
-    current_line1 = build_preset_line1()
-    update_overlay(force_preset_name=True)
+    current_line1 = build_scene_line1()
+    update_overlay(force_title=True)
 
 def handle_preset_selection_cc(msg, out_port):
     global preset_prefix, preset_prefix_time, current_line1
@@ -835,7 +874,7 @@ def main():
         if msg.type == "sysex" and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
             active_scene = msg.data[8] + 1
             current_line1 = build_scene_line1()
-            update_overlay()
+            update_overlay(force_title=True)
             return
 
         if is_ignored_output_note(msg):
@@ -989,6 +1028,15 @@ def main():
                 send_m8_button_down(out_port, clean_mapping[1], clean_mapping[2])
             else:
                 send_m8_button_up(out_port, clean_mapping[1], clean_mapping[2])
+        elif out_type == "midi_transport":
+            if is_press:
+                command = clean_mapping[1]
+                if command == "start":
+                    out_port.send(mido.Message("start"))
+                elif command == "stop":
+                    out_port.send(mido.Message("stop"))
+                else:
+                    print(f"Unknown MIDI transport command: {command}")
         elif out_type == "cc":
             out_port.send(mido.Message("control_change", channel=clean_mapping[1], control=clean_mapping[2], value=val))
 
