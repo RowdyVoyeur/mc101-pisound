@@ -8,6 +8,9 @@ import threading
 # --- CONFIGURATION ---
 OVERLAY_PIPE = "/tmp/m8c_overlay"
 M8_CHANNEL = 15  # MIDI channel 16 in mido's zero-based numbering.
+MC101_CONTROL_CHANNEL = 12  # MIDI channel 13 in mido's zero-based numbering.
+MC101_SCENE_BANK_COUNT = 8
+MC101_SCENES_PER_BANK = 8
 
 # Presets
 PRESET_1 = 1
@@ -59,6 +62,7 @@ active_track = 1
 active_partial = 1
 active_pad = 1
 active_pad_bank = 0
+active_mc101_scene_bank = 0
 
 last_edited_label = None
 last_edited_name = None
@@ -360,10 +364,45 @@ PRESET_5: {
         }
     },
     PRESET_8: {
-        "name": "EMPTY",
+        "name": "MC-101",
         "context": "none",
-        "display_values": False,
-        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+        "display_values": True,
+        "scenes": {
+            1: {
+                "name": "SCENES",
+                "mappings": {
+                    # Scene trigger buttons. The selected bank decides which
+                    # Program Change range these notes send:
+                    #   Bank 01 -> PC 0-7, Bank 02 -> PC 8-15, etc.
+                    ("note", 0): named(("mc101_scene_select", 0), "Scene"),
+                    ("note", 1): named(("mc101_scene_select", 1), "Scene"),
+                    ("note", 2): named(("mc101_scene_select", 2), "Scene"),
+                    ("note", 3): named(("mc101_scene_select", 3), "Scene"),
+                    ("note", 4): named(("mc101_scene_select", 4), "Scene"),
+                    ("note", 5): named(("mc101_scene_select", 5), "Scene"),
+                    ("note", 6): named(("mc101_scene_select", 6), "Scene"),
+                    ("note", 7): named(("mc101_scene_select", 7), "Scene"),
+
+                    # Scene bank selectors. A-1 selects Scene Bank 01,
+                    # A#-1 selects Scene Bank 02, through E0 = Scene Bank 08.
+                    ("note", 9): named(("mc101_scene_bank", 0), "Scene Bank 01"),
+                    ("note", 10): named(("mc101_scene_bank", 1), "Scene Bank 02"),
+                    ("note", 11): named(("mc101_scene_bank", 2), "Scene Bank 03"),
+                    ("note", 12): named(("mc101_scene_bank", 3), "Scene Bank 04"),
+                    ("note", 13): named(("mc101_scene_bank", 4), "Scene Bank 05"),
+                    ("note", 14): named(("mc101_scene_bank", 5), "Scene Bank 06"),
+                    ("note", 15): named(("mc101_scene_bank", 6), "Scene Bank 07"),
+                    ("note", 16): named(("mc101_scene_bank", 7), "Scene Bank 08"),
+
+                    # MC-101 transport controls.
+                    # MIDI note numbers use C-1 = 0:
+                    #   G#-1 = 8  -> MIDI Stop
+                    #   F0  = 17 -> MIDI Start
+                    ("note", 8): named(("midi_transport", "stop", "STOP", "STP"), "STOP"),
+                    ("note", 17): named(("midi_transport", "start", "START", "PLA"), "PLAY"),
+                }
+            }
+        }
     },
 }
 
@@ -447,6 +486,21 @@ def build_scene_line1():
     preset_data = PRESETS.get(active_preset, {})
     scene_data = preset_data.get("scenes", {}).get(active_scene, {})
     return f"{preset_data.get('name', 'NONE')} > {scene_data.get('name', f'S{active_scene}')}"
+
+def mc101_scene_program(scene_index):
+    return active_mc101_scene_bank * MC101_SCENES_PER_BANK + scene_index
+
+def mc101_scene_label(scene_index):
+    return f"S{active_mc101_scene_bank + 1}{scene_index + 1}"
+
+def mc101_scene_name(scene_index):
+    return f"Scene {active_mc101_scene_bank + 1:02d}-{scene_index + 1:02d}"
+
+def mc101_scene_bank_label(bank_index):
+    return f"B{bank_index + 1:02d}"
+
+def mc101_scene_bank_name(bank_index):
+    return f"Scene Bank {bank_index + 1:02d}"
 
 def build_edit_line1(label=None, value=None, text=None, name=None):
     preset_name = PRESETS.get(active_preset, {}).get("name", "NONE")
@@ -542,6 +596,10 @@ def get_mapping_label(mapping):
 
     if out_type in ["track_select", "partial_select"]:
         return clean_mapping[2]
+    if out_type == "mc101_scene_select":
+        return mc101_scene_label(clean_mapping[1])
+    if out_type == "mc101_scene_bank":
+        return mc101_scene_bank_label(clean_mapping[1])
     if out_type == "drum_sysex_partial":
         return clean_mapping[3]
     if out_type == "drum_pad_select":
@@ -555,6 +613,13 @@ def get_mapping_label(mapping):
     return "---"
 
 def get_mapping_name(mapping, fallback=None):
+    if mapping:
+        clean_mapping = strip_mapping_metadata(mapping)
+        out_type = clean_mapping[0]
+        if out_type == "mc101_scene_select":
+            return mc101_scene_name(clean_mapping[1])
+        if out_type == "mc101_scene_bank":
+            return mc101_scene_bank_name(clean_mapping[1])
     return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
 
 def get_target_fields(mapping, out_type):
@@ -773,7 +838,7 @@ def handle_selector_cc(out_port, control, value, suppress_navigation=False):
     stop_arrow_repeat(out_port, control, M8_CHANNEL, note)
 
 def select_preset(preset_number, out_port=None):
-    global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank
+    global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text, current_line1
 
     active_preset = preset_number
@@ -793,6 +858,7 @@ def select_preset(preset_number, out_port=None):
     active_partial = 1
     active_pad = 1
     active_pad_bank = 0
+    active_mc101_scene_bank = 0
 
     last_edited_label = None
     last_edited_name = None
@@ -851,7 +917,7 @@ def schedule_matrix_swap(preset_number, scene_number, trigger_time):
 
 # --- MAIN MIDI ROUTER ---
 def main():
-    global active_scene, active_track, active_partial, active_pad, active_pad_bank
+    global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text
     global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
@@ -867,7 +933,7 @@ def main():
     update_overlay()
 
     def midi_callback(msg):
-        global active_scene, active_track, active_partial, active_pad, active_pad_bank
+        global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
         global last_edited_label, last_edited_name, last_edited_val, last_edited_text
         global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
@@ -1010,6 +1076,30 @@ def main():
                 last_edited_val = f_val
                 last_edited_text = text_map.get(f_val) if text_map else None
                 current_line1 = build_edit_line1(label, value=last_edited_val, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
+        if out_type == "mc101_scene_bank":
+            if is_press:
+                active_mc101_scene_bank = clean_mapping[1]
+                last_edited_label = get_mapping_label(mapping)
+                last_edited_name = get_mapping_name(mapping)
+                last_edited_val = None
+                last_edited_text = f"{active_mc101_scene_bank + 1:02d}"
+                current_line1 = f"{build_scene_line1()} > {last_edited_name}"
+                update_overlay()
+            return
+
+        if out_type == "mc101_scene_select":
+            if is_press:
+                scene_index = clean_mapping[1]
+                program = mc101_scene_program(scene_index)
+                out_port.send(mido.Message("program_change", channel=MC101_CONTROL_CHANNEL, program=program))
+                last_edited_label = mc101_scene_label(scene_index)
+                last_edited_name = mc101_scene_name(scene_index)
+                last_edited_val = program
+                last_edited_text = f"PC {program}"
+                current_line1 = f"{build_scene_line1()} > {last_edited_name}"
                 update_overlay()
             return
 
