@@ -12,6 +12,16 @@ MC101_CONTROL_CHANNEL = 12  # MIDI channel 13 in mido's zero-based numbering.
 MC101_SCENE_BANK_COUNT = 8
 MC101_SCENES_PER_BANK = 8
 
+# M8 song row cue configuration.
+# M8 row cue notes are sent on MIDI channel 15, which is channel 14
+# in mido's zero-based numbering. CC64 is kept above 64 so the
+# selected row remains held instead of being released immediately.
+M8_ROW_CUE_CHANNEL = 14
+M8_ROW_HOLD_CC = 64
+M8_ROW_HOLD_VALUE = 127
+M8_ROW_RELEASE_VALUE = 0
+M8_ROW_NOTE_VELOCITY = 100
+
 # Presets
 PRESET_1 = 1
 PRESET_2 = 2
@@ -63,6 +73,7 @@ active_partial = 1
 active_pad = 1
 active_pad_bank = 0
 active_mc101_scene_bank = 0
+active_m8_row_note = None
 
 last_edited_label = None
 last_edited_name = None
@@ -154,6 +165,83 @@ PRESETS = {
         }
     },
     PRESET_2: {
+        "name": "M8 & MC-101",
+        "context": "none",
+        "display_values": True,
+        "scenes": {
+            1: {
+                "name": "LIVE (01-08)",
+                "default_scene_bank": 0,
+                "mappings": {
+                    # Scene trigge)r buttons. The selected bank decides which
+                    # Program Change range these notes send:
+                    #   Bank 01 -> PC 0-7, Bank 02 -> PC 8-15, etc.
+                    ("note", 0): named(("mc101_scene_select", 0), "Scene"),
+                    ("note", 1): named(("mc101_scene_select", 1), "Scene"),
+                    ("note", 2): named(("mc101_scene_select", 2), "Scene"),
+                    ("note", 3): named(("mc101_scene_select", 3), "Scene"),
+                    ("note", 4): named(("mc101_scene_select", 4), "Scene"),
+                    ("note", 5): named(("mc101_scene_select", 5), "Scene"),
+                    ("note", 6): named(("mc101_scene_select", 6), "Scene"),
+                    ("note", 7): named(("mc101_scene_select", 7), "Scene"),
+
+                    # Bank selectors. A-1 selects Bank 01,
+                    # A#-1 selects Bank 02, through E0 = Bank 08.
+                    ("note", 9): named(("mc101_scene_bank", 0), "Bank 01"),
+                    ("note", 10): named(("mc101_scene_bank", 1), "Bank 02"),
+                    ("note", 11): named(("mc101_scene_bank", 2), "Bank 03"),
+                    ("note", 12): named(("mc101_scene_bank", 3), "Bank 04"),
+                    ("note", 13): named(("mc101_scene_bank", 4), "Bank 05"),
+                    ("note", 14): named(("mc101_scene_bank", 5), "Bank 06"),
+                    ("note", 15): named(("mc101_scene_bank", 6), "Bank 07"),
+                    ("note", 16): named(("mc101_scene_bank", 7), "Bank 08"),
+
+                    # MC-101 transport controls.
+                    # MIDI note numbers use C-1 = 0:
+                    #   G#-1 = 8  -> MIDI Stop
+                    #   F0  = 17 -> MIDI Start
+                    ("note", 8): named(("midi_transport", "stop", "STOP", "STP"), "STOP"),
+                    ("note", 17): named(("midi_transport", "start", "START", "PLA"), "PLAY"),
+                }
+            },
+            2: {
+                "name": "LIVE (09-16)",
+                "default_scene_bank": 8,
+                "mappings": {
+                    # Same layout as Scene 1, but offset to nanoKONTROL Scene 2
+                    # note numbers and defaulting to Bank 09.
+                    #   Bank 09 -> PC 64-71, Bank 10 -> PC 72-79, etc.
+                    ("note", 18): named(("mc101_scene_select", 0), "Scene"),
+                    ("note", 19): named(("mc101_scene_select", 1), "Scene"),
+                    ("note", 20): named(("mc101_scene_select", 2), "Scene"),
+                    ("note", 21): named(("mc101_scene_select", 3), "Scene"),
+                    ("note", 22): named(("mc101_scene_select", 4), "Scene"),
+                    ("note", 23): named(("mc101_scene_select", 5), "Scene"),
+                    ("note", 24): named(("mc101_scene_select", 6), "Scene"),
+                    ("note", 25): named(("mc101_scene_select", 7), "Scene"),
+
+                    # Bank selectors. A-1 selects Bank 09,
+                    # A#-1 selects Bank 10, through E0 = Bank 16.
+                    ("note", 27): named(("mc101_scene_bank", 8), "Bank 09"),
+                    ("note", 28): named(("mc101_scene_bank", 9), "Bank 10"),
+                    ("note", 29): named(("mc101_scene_bank", 10), "Bank 11"),
+                    ("note", 30): named(("mc101_scene_bank", 11), "Bank 12"),
+                    ("note", 31): named(("mc101_scene_bank", 12), "Bank 13"),
+                    ("note", 32): named(("mc101_scene_bank", 13), "Bank 14"),
+                    ("note", 33): named(("mc101_scene_bank", 14), "Bank 15"),
+                    ("note", 34): named(("mc101_scene_bank", 15), "Bank 16"),
+
+                    # MC-101 transport controls.
+                    # MIDI note numbers use C-1 = 18 in nanoKONTROL Scene 2:
+                    #   G#-1 = 26 -> MIDI Stop
+                    #   F0  = 35 -> MIDI Start
+                    ("note", 26): named(("midi_transport", "stop", "STOP", "STP"), "STOP"),
+                    ("note", 35): named(("midi_transport", "start", "START", "PLA"), "PLAY"),
+                }
+            }
+        }
+    },
+    PRESET_3: {
         "name": "M8",
         "context": "none",
         "display_values": False,
@@ -171,17 +259,11 @@ PRESETS = {
             }
         }
     },
-    PRESET_3: {
-        "name": "EMPTY",
-        "context": "none",
-        "display_values": False,
-        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
-    },
     PRESET_4: {
-        "name": "EMPTY",
+        "name": "M8",
         "context": "none",
         "display_values": False,
-        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+        "scenes": {1: {"name": "PERFORMANCE", "mappings": {}}}
     },
 PRESET_5: {
         "name": "MC-101",
@@ -364,46 +446,11 @@ PRESET_5: {
         }
     },
     PRESET_8: {
-        "name": "MC-101",
+        "name": "EMPTY",
         "context": "none",
-        "display_values": True,
-        "scenes": {
-            1: {
-                "name": "SCENES",
-                "mappings": {
-                    # Scene trigger buttons. The selected bank decides which
-                    # Program Change range these notes send:
-                    #   Bank 01 -> PC 0-7, Bank 02 -> PC 8-15, etc.
-                    ("note", 0): named(("mc101_scene_select", 0), "Scene"),
-                    ("note", 1): named(("mc101_scene_select", 1), "Scene"),
-                    ("note", 2): named(("mc101_scene_select", 2), "Scene"),
-                    ("note", 3): named(("mc101_scene_select", 3), "Scene"),
-                    ("note", 4): named(("mc101_scene_select", 4), "Scene"),
-                    ("note", 5): named(("mc101_scene_select", 5), "Scene"),
-                    ("note", 6): named(("mc101_scene_select", 6), "Scene"),
-                    ("note", 7): named(("mc101_scene_select", 7), "Scene"),
-
-                    # Scene bank selectors. A-1 selects Scene Bank 01,
-                    # A#-1 selects Scene Bank 02, through E0 = Scene Bank 08.
-                    ("note", 9): named(("mc101_scene_bank", 0), "Scene Bank 01"),
-                    ("note", 10): named(("mc101_scene_bank", 1), "Scene Bank 02"),
-                    ("note", 11): named(("mc101_scene_bank", 2), "Scene Bank 03"),
-                    ("note", 12): named(("mc101_scene_bank", 3), "Scene Bank 04"),
-                    ("note", 13): named(("mc101_scene_bank", 4), "Scene Bank 05"),
-                    ("note", 14): named(("mc101_scene_bank", 5), "Scene Bank 06"),
-                    ("note", 15): named(("mc101_scene_bank", 6), "Scene Bank 07"),
-                    ("note", 16): named(("mc101_scene_bank", 7), "Scene Bank 08"),
-
-                    # MC-101 transport controls.
-                    # MIDI note numbers use C-1 = 0:
-                    #   G#-1 = 8  -> MIDI Stop
-                    #   F0  = 17 -> MIDI Start
-                    ("note", 8): named(("midi_transport", "stop", "STOP", "STP"), "STOP"),
-                    ("note", 17): named(("midi_transport", "start", "START", "PLA"), "PLAY"),
-                }
-            }
-        }
-    },
+        "display_values": False,
+        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+    }, 
 }
 
 # --- ROLAND 7-BIT SYSEX MATH HELPERS ---
@@ -487,6 +534,13 @@ def build_scene_line1():
     scene_data = preset_data.get("scenes", {}).get(active_scene, {})
     return f"{preset_data.get('name', 'NONE')} > {scene_data.get('name', f'S{active_scene}')}"
 
+
+def get_default_mc101_scene_bank(scene_number=None):
+    preset_data = PRESETS.get(active_preset, {})
+    scene_data = preset_data.get("scenes", {}).get(scene_number or active_scene, {})
+    return scene_data.get("default_scene_bank", 0)
+
+
 def mc101_scene_program(scene_index):
     return active_mc101_scene_bank * MC101_SCENES_PER_BANK + scene_index
 
@@ -495,6 +549,63 @@ def mc101_scene_label(scene_index):
 
 def mc101_scene_name(scene_index):
     return f"Scene {active_mc101_scene_bank + 1:02d}-{scene_index + 1:02d}"
+
+def send_m8_row_hold(out_port, value=M8_ROW_HOLD_VALUE):
+    out_port.send(mido.Message(
+        "control_change",
+        channel=M8_ROW_CUE_CHANNEL,
+        control=M8_ROW_HOLD_CC,
+        value=value,
+    ))
+
+def release_active_m8_row(out_port):
+    global active_m8_row_note
+
+    if active_m8_row_note is None:
+        return
+
+    out_port.send(mido.Message(
+        "note_off",
+        channel=M8_ROW_CUE_CHANNEL,
+        note=active_m8_row_note,
+        velocity=0,
+    ))
+    active_m8_row_note = None
+
+def launch_m8_song_row(out_port, row_index):
+    """Launch/cue an M8 song row and keep it held.
+
+    pc2note.py sends a short note pulse when the MC-101 itself emits a
+    Program Change. When the scene is selected from nanoKONTROL, the MC-101
+    does not echo that Program Change back out, so the matching M8 row note
+    must be sent here directly.
+
+    Do not send an immediate note_off here. For the M8 song row cue use case,
+    the row should stay held; sending note_off immediately can cancel the cue
+    even if CC64 has been sent.
+    """
+    global active_m8_row_note
+
+    if active_m8_row_note is not None:
+        # Release the previously held row before holding the next one. The new
+        # row is sent immediately afterwards, so normal scene changes remain
+        # seamless while avoiding a pile-up of held row notes.
+        send_m8_row_hold(out_port, M8_ROW_RELEASE_VALUE)
+        release_active_m8_row(out_port)
+
+    send_m8_row_hold(out_port, M8_ROW_HOLD_VALUE)
+
+    out_port.send(mido.Message(
+        "note_on",
+        channel=M8_ROW_CUE_CHANNEL,
+        note=row_index,
+        velocity=M8_ROW_NOTE_VELOCITY,
+    ))
+    active_m8_row_note = row_index
+
+def cleanup_m8_song_row(out_port):
+    release_active_m8_row(out_port)
+    send_m8_row_hold(out_port, M8_ROW_RELEASE_VALUE)
 
 def mc101_scene_bank_label(bank_index):
     return f"B{bank_index + 1:02d}"
@@ -858,7 +969,7 @@ def select_preset(preset_number, out_port=None):
     active_partial = 1
     active_pad = 1
     active_pad_bank = 0
-    active_mc101_scene_bank = 0
+    active_mc101_scene_bank = get_default_mc101_scene_bank(active_scene)
 
     last_edited_label = None
     last_edited_name = None
@@ -917,7 +1028,7 @@ def schedule_matrix_swap(preset_number, scene_number, trigger_time):
 
 # --- MAIN MIDI ROUTER ---
 def main():
-    global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
+    global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank, active_m8_row_note
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text
     global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
@@ -933,12 +1044,13 @@ def main():
     update_overlay()
 
     def midi_callback(msg):
-        global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
+        global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank, active_m8_row_note
         global last_edited_label, last_edited_name, last_edited_val, last_edited_text
         global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
         if msg.type == "sysex" and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
             active_scene = msg.data[8] + 1
+            active_mc101_scene_bank = get_default_mc101_scene_bank(active_scene)
             current_line1 = build_scene_line1()
             update_overlay(force_title=True)
             return
@@ -1094,7 +1206,14 @@ def main():
             if is_press:
                 scene_index = clean_mapping[1]
                 program = mc101_scene_program(scene_index)
+
+                # Select the scene on the MC-101. The MC-101 does not echo
+                # this generated Program Change back out, so pc2note.py cannot
+                # convert it into an M8 row cue. Launch the matching M8 row here
+                # as well.
                 out_port.send(mido.Message("program_change", channel=MC101_CONTROL_CHANNEL, program=program))
+                launch_m8_song_row(out_port, program)
+
                 last_edited_label = mc101_scene_label(scene_index)
                 last_edited_name = mc101_scene_name(scene_index)
                 last_edited_val = program
@@ -1147,6 +1266,7 @@ def main():
         pass
     finally:
         if out_port is not None:
+            cleanup_m8_song_row(out_port)
             release_all_navigation_notes(out_port)
         in_port.close()
         out_port.close()

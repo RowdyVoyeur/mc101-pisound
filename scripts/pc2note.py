@@ -9,9 +9,40 @@ from rtmidi.midiconstants import PROGRAM_CHANGE, NOTE_ON, NOTE_OFF
 SOURCE_CHANNEL = 12
 TARGET_CHANNEL = 14
 
+# M8 song row cue hold configuration.
+# CC64 >= 64 keeps the queued/launched row held. The note is only released
+# when another row is selected or when this script exits.
+CONTROL_CHANGE = 0xB0
+M8_ROW_HOLD_CC = 64
+M8_ROW_HOLD_ON_VALUE = 127
+M8_ROW_HOLD_OFF_VALUE = 0
+M8_ROW_NOTE_VELOCITY = 100
+
+def send_cc(midi_out, channel, control, value):
+    midi_out.send_message([
+        CONTROL_CHANGE | channel,
+        control & 0x7F,
+        value & 0x7F,
+    ])
+
+def send_note_on(midi_out, channel, note, velocity):
+    midi_out.send_message([
+        NOTE_ON | channel,
+        note & 0x7F,
+        velocity & 0x7F,
+    ])
+
+def send_note_off(midi_out, channel, note):
+    midi_out.send_message([
+        NOTE_OFF | channel,
+        note & 0x7F,
+        0,
+    ])
+
 def main():
     midi_in = rtmidi.MidiIn()
     midi_out = rtmidi.MidiOut()
+    held_row_note = None
 
     in_ports = midi_in.get_ports()
     out_ports = midi_out.get_ports()
@@ -28,24 +59,31 @@ def main():
     midi_in.open_port(mc101_idx)
     midi_out.open_port(m8_idx)
 
+    def launch_m8_row(row_note):
+        nonlocal held_row_note
+
+        # Release the previous row only when a different row is selected.
+        if held_row_note is not None and held_row_note != row_note:
+            send_note_off(midi_out, TARGET_CHANNEL, held_row_note)
+
+        # Keep the M8 row cue held, then send the row note without an immediate
+        # note-off. This matches the working nanokontroller.py scene-launch logic.
+        send_cc(midi_out, TARGET_CHANNEL, M8_ROW_HOLD_CC, M8_ROW_HOLD_ON_VALUE)
+        send_note_on(midi_out, TARGET_CHANNEL, row_note, M8_ROW_NOTE_VELOCITY)
+        held_row_note = row_note
+
     def midi_callback(event, data=None):
         message, timestamp = event
+        if not message:
+            return
+
         status = message[0] & 0xF0
         channel = message[0] & 0x0F
 
         # Filter for Program Change on Source Channel
-        if status == PROGRAM_CHANGE and channel == SOURCE_CHANNEL:
+        if status == PROGRAM_CHANGE and channel == SOURCE_CHANNEL and len(message) >= 2:
             pc_value = message[1]
-          
-            # Prepare Note messages
-            note_on = [NOTE_ON | TARGET_CHANNEL, pc_value, 100]
-            note_off = [NOTE_OFF | TARGET_CHANNEL, pc_value, 0]
-
-            # Send to M8
-            midi_out.send_message(note_on)
-            # A 1ms gate is enough for the M8 to register the trigger
-            time.sleep(0.001) 
-            midi_out.send_message(note_off)
+            launch_m8_row(pc_value)
 
     # Attach the callback listener
     midi_in.set_callback(midi_callback)
@@ -57,6 +95,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if held_row_note is not None:
+            send_note_off(midi_out, TARGET_CHANNEL, held_row_note)
+        send_cc(midi_out, TARGET_CHANNEL, M8_ROW_HOLD_CC, M8_ROW_HOLD_OFF_VALUE)
         midi_in.close_port()
         midi_out.close_port()
 
