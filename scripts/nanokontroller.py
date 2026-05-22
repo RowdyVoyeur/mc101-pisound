@@ -17,6 +17,9 @@ MC101_SCENES_PER_BANK = 8
 # in mido's zero-based numbering. CC64 is kept above 64 so the
 # selected row remains held instead of being released immediately.
 M8_ROW_CUE_CHANNEL = 14
+# Set to False to disable the CC64 hold/release messages while keeping the
+# rest of the M8 row-cue behaviour intact. Set back to True to re-enable CC64.
+M8_ROW_HOLD_ENABLED = True
 M8_ROW_HOLD_CC = 64
 M8_ROW_HOLD_VALUE = 127
 M8_ROW_RELEASE_VALUE = 0
@@ -247,13 +250,50 @@ PRESETS = {
         "display_values": False,
         "scenes": {
             1: {
-                "name": "MIXER",
+                "name": "PERFORMANCE",
                 "mappings": {
 
-                    ("cc", 0): named(("cc", M8_CHANNEL, 1, "001"), "CC 001"),
-                    ("cc", 1): named(("cc", M8_CHANNEL, 2, "002"), "CC 002"),
-                    ("note", 0): named(("note", M8_CHANNEL, 12, "toggle", "M01"), "M8 Macro 01"),
-                    ("note", 1): named(("note", M8_CHANNEL, 13, "toggle", "M02"), "M8 Macro 02"),
+                    # M8 track mute controls. MIDI note numbers use C-1 = 0.
+                    # Physical C-1 to G-1 send C0 to G0 on MIDI Channel 16.
+                    ("note", 0): named(("note", M8_CHANNEL, 12, "toggle", "M01"), "Mute Track 1"),
+                    ("note", 1): named(("note", M8_CHANNEL, 13, "toggle", "M02"), "Mute Track 2"),
+                    ("note", 2): named(("note", M8_CHANNEL, 14, "toggle", "M03"), "Mute Track 3"),
+                    ("note", 3): named(("note", M8_CHANNEL, 15, "toggle", "M04"), "Mute Track 4"),
+                    ("note", 4): named(("note", M8_CHANNEL, 16, "toggle", "M05"), "Mute Track 5"),
+                    ("note", 5): named(("note", M8_CHANNEL, 17, "toggle", "M06"), "Mute Track 6"),
+                    ("note", 6): named(("note", M8_CHANNEL, 18, "toggle", "M07"), "Mute Track 7"),
+                    ("note", 7): named(("note", M8_CHANNEL, 19, "toggle", "M08"), "Mute Track 8"),
+
+                    # M8 track solo controls.
+                    # Physical A-1 to E0 send G#0 to D#1 on MIDI Channel 16.
+                    ("note", 9): named(("note", M8_CHANNEL, 20, "toggle", "S01"), "Solo Track 1"),
+                    ("note", 10): named(("note", M8_CHANNEL, 21, "toggle", "S02"), "Solo Track 2"),
+                    ("note", 11): named(("note", M8_CHANNEL, 22, "toggle", "S03"), "Solo Track 3"),
+                    ("note", 12): named(("note", M8_CHANNEL, 23, "toggle", "S04"), "Solo Track 4"),
+                    ("note", 13): named(("note", M8_CHANNEL, 24, "toggle", "S05"), "Solo Track 5"),
+                    ("note", 14): named(("note", M8_CHANNEL, 25, "toggle", "S06"), "Solo Track 6"),
+                    ("note", 15): named(("note", M8_CHANNEL, 26, "toggle", "S07"), "Solo Track 7"),
+                    ("note", 16): named(("note", M8_CHANNEL, 27, "toggle", "S08"), "Solo Track 8"),
+
+                    # M8 CC controls on MIDI Channel 16.
+                    ("cc", 0): named(("cc", M8_CHANNEL, 0, "C00"), "CC 00"),
+                    ("cc", 1): named(("cc", M8_CHANNEL, 1, "C01"), "CC 01"),
+                    ("cc", 2): named(("cc", M8_CHANNEL, 2, "C02"), "CC 02"),
+                    ("cc", 3): named(("cc", M8_CHANNEL, 3, "C03"), "CC 03"),
+                    ("cc", 4): named(("cc", M8_CHANNEL, 4, "C04"), "CC 04"),
+                    ("cc", 5): named(("cc", M8_CHANNEL, 5, "C05"), "CC 05"),
+                    ("cc", 6): named(("cc", M8_CHANNEL, 6, "C06"), "CC 06"),
+                    ("cc", 7): named(("cc", M8_CHANNEL, 7, "C07"), "CC 07"),
+                    ("cc", 8): named(("cc", M8_CHANNEL, 8, "C08"), "CC 08"),
+                    ("cc", 9): named(("cc", M8_CHANNEL, 9, "V01"), "Volume Track 1"),
+                    ("cc", 10): named(("cc", M8_CHANNEL, 10, "V02"), "Volume Track 2"),
+                    ("cc", 11): named(("cc", M8_CHANNEL, 11, "V03"), "Volume Track 3"),
+                    ("cc", 12): named(("cc", M8_CHANNEL, 12, "V04"), "Volume Track 4"),
+                    ("cc", 13): named(("cc", M8_CHANNEL, 13, "V05"), "Volume Track 5"),
+                    ("cc", 14): named(("cc", M8_CHANNEL, 14, "V06"), "Volume Track 6"),
+                    ("cc", 15): named(("cc", M8_CHANNEL, 15, "V07"), "Volume Track 7"),
+                    ("cc", 16): named(("cc", M8_CHANNEL, 16, "V08"), "Volume Track 8"),
+                    ("cc", 17): named(("cc", M8_CHANNEL, 17, "V09"), "Volume Track 9"),
 
                 }
             }
@@ -551,6 +591,9 @@ def mc101_scene_name(scene_index):
     return f"Scene {active_mc101_scene_bank + 1:02d}-{scene_index + 1:02d}"
 
 def send_m8_row_hold(out_port, value=M8_ROW_HOLD_VALUE):
+    if not M8_ROW_HOLD_ENABLED:
+        return
+
     out_port.send(mido.Message(
         "control_change",
         channel=M8_ROW_CUE_CHANNEL,
@@ -572,19 +615,36 @@ def release_active_m8_row(out_port):
     ))
     active_m8_row_note = None
 
+def send_m8_row_note_pulse(out_port, row_index):
+    out_port.send(mido.Message(
+        "note_on",
+        channel=M8_ROW_CUE_CHANNEL,
+        note=row_index,
+        velocity=M8_ROW_NOTE_VELOCITY,
+    ))
+    time.sleep(SELECTOR_NOTE_PULSE_SECONDS)
+    out_port.send(mido.Message(
+        "note_off",
+        channel=M8_ROW_CUE_CHANNEL,
+        note=row_index,
+        velocity=0,
+    ))
+
 def launch_m8_song_row(out_port, row_index):
-    """Launch/cue an M8 song row and keep it held.
+    """Launch/cue an M8 song row from the nanoKONTROL scene launcher.
 
-    pc2note.py sends a short note pulse when the MC-101 itself emits a
-    Program Change. When the scene is selected from nanoKONTROL, the MC-101
-    does not echo that Program Change back out, so the matching M8 row note
-    must be sent here directly.
+    When M8_ROW_HOLD_ENABLED is True, keep the selected row held with CC64 and
+    leave the row note on until another row is selected or the script exits.
 
-    Do not send an immediate note_off here. For the M8 song row cue use case,
-    the row should stay held; sending note_off immediately can cancel the cue
-    even if CC64 has been sent.
+    When M8_ROW_HOLD_ENABLED is False, do not send CC64 at all and do not leave
+    the row note held. In that mode the row is launched with a short note pulse.
     """
     global active_m8_row_note
+
+    if not M8_ROW_HOLD_ENABLED:
+        release_active_m8_row(out_port)
+        send_m8_row_note_pulse(out_port, row_index)
+        return
 
     if active_m8_row_note is not None:
         # Release the previously held row before holding the next one. The new
@@ -605,7 +665,8 @@ def launch_m8_song_row(out_port, row_index):
 
 def cleanup_m8_song_row(out_port):
     release_active_m8_row(out_port)
-    send_m8_row_hold(out_port, M8_ROW_RELEASE_VALUE)
+    if M8_ROW_HOLD_ENABLED:
+        send_m8_row_hold(out_port, M8_ROW_RELEASE_VALUE)
 
 def mc101_scene_bank_label(bank_index):
     return f"B{bank_index + 1:02d}"
@@ -1225,7 +1286,12 @@ def main():
         label = get_mapping_label(mapping)
         mapping_name = get_mapping_name(mapping, label)
 
-        if out_type == "note":
+        if out_type == "m8_toggle_note":
+            # M8 mute/solo commands are toggle actions. The nanoKONTROL matrix
+            # buttons can report the second physical press as note_off/velocity 0,
+            # so every incoming edge for this mapping sends one short note pulse.
+            send_note_pulse(out_port, clean_mapping[1], clean_mapping[2])
+        elif out_type == "note":
             out_port.send(mido.Message("note_on" if val > 0 else "note_off", channel=clean_mapping[1], note=clean_mapping[2], velocity=val))
         elif out_type == "note_pulse":
             if is_press:

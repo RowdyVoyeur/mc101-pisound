@@ -10,9 +10,11 @@ SOURCE_CHANNEL = 12
 TARGET_CHANNEL = 14
 
 # M8 song row cue hold configuration.
-# CC64 >= 64 keeps the queued/launched row held. The note is only released
-# when another row is selected or when this script exits.
+# Notes are held until another row is selected or until this script exits.
+# Set M8_ROW_HOLD_ENABLED to True if you want the script to also send CC64
+# hold/release messages alongside the row note.
 CONTROL_CHANGE = 0xB0
+M8_ROW_HOLD_ENABLED = False
 M8_ROW_HOLD_CC = 64
 M8_ROW_HOLD_ON_VALUE = 127
 M8_ROW_HOLD_OFF_VALUE = 0
@@ -24,6 +26,12 @@ def send_cc(midi_out, channel, control, value):
         control & 0x7F,
         value & 0x7F,
     ])
+
+def send_m8_row_hold(midi_out, value):
+    if not M8_ROW_HOLD_ENABLED:
+        return
+
+    send_cc(midi_out, TARGET_CHANNEL, M8_ROW_HOLD_CC, value)
 
 def send_note_on(midi_out, channel, note, velocity):
     midi_out.send_message([
@@ -66,9 +74,9 @@ def main():
         if held_row_note is not None and held_row_note != row_note:
             send_note_off(midi_out, TARGET_CHANNEL, held_row_note)
 
-        # Keep the M8 row cue held, then send the row note without an immediate
-        # note-off. This matches the working nanokontroller.py scene-launch logic.
-        send_cc(midi_out, TARGET_CHANNEL, M8_ROW_HOLD_CC, M8_ROW_HOLD_ON_VALUE)
+        # Keep the M8 row cue held by leaving the row note on. CC64 is optional
+        # and disabled by default via M8_ROW_HOLD_ENABLED.
+        send_m8_row_hold(midi_out, M8_ROW_HOLD_ON_VALUE)
         send_note_on(midi_out, TARGET_CHANNEL, row_note, M8_ROW_NOTE_VELOCITY)
         held_row_note = row_note
 
@@ -97,7 +105,7 @@ def main():
     finally:
         if held_row_note is not None:
             send_note_off(midi_out, TARGET_CHANNEL, held_row_note)
-        send_cc(midi_out, TARGET_CHANNEL, M8_ROW_HOLD_CC, M8_ROW_HOLD_OFF_VALUE)
+        send_m8_row_hold(midi_out, M8_ROW_HOLD_OFF_VALUE)
         midi_in.close_port()
         midi_out.close_port()
 
