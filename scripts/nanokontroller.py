@@ -96,6 +96,8 @@ arrow_repeat_lock = threading.Lock()
 
 toggle_states = {}
 param_states = {}
+keyboard_octaves = {}
+keyboard_active_notes = {}
 
 # --- VALUE MAPS ---
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
@@ -139,6 +141,52 @@ def get_configured_parameter_name(mapping, fallback=None):
             if is_parameter_name_meta(item):
                 return item[PARAMETER_NAME_KEY]
     return fallback or "Parameter"
+
+KEYBOARD_BASE_NOTE_NAMES = [
+    "C-1", "C#-1", "D-1", "D#-1", "E-1", "F-1", "F#-1", "G-1",
+    "G#-1", "A-1", "A#-1", "B-1", "C0", "C#0", "D0", "D#0",
+]
+
+KEYBOARD_MIN_OCTAVE = 0
+KEYBOARD_MAX_OCTAVE = 9
+
+def keyboard_short_label(note_name):
+    return note_name[:3].upper().ljust(3, " ")
+
+def build_keyboard_scene_mappings(note_offset, midi_channel):
+    """Build one nanoKONTROL scene as a 16-key M8 keyboard.
+
+    note_offset is the first incoming note number for the nanoKONTROL scene.
+    midi_channel uses mido's zero-based numbering, so MIDI channel 5 is 4.
+    """
+    mappings = {}
+
+    for index in range(8):
+        note_name = KEYBOARD_BASE_NOTE_NAMES[index]
+        mappings[("note", note_offset + index)] = named(
+            ("keyboard_note", midi_channel, index, keyboard_short_label(note_name)),
+            f"Key {note_name}",
+        )
+
+    mappings[("note", note_offset + 8)] = named(
+        ("keyboard_octave", midi_channel, 1, "O+ "),
+        "Octave Up",
+    )
+
+    for index in range(8):
+        base_note = index + 8
+        note_name = KEYBOARD_BASE_NOTE_NAMES[base_note]
+        mappings[("note", note_offset + 9 + index)] = named(
+            ("keyboard_note", midi_channel, base_note, keyboard_short_label(note_name)),
+            f"Key {note_name}",
+        )
+
+    mappings[("note", note_offset + 17)] = named(
+        ("keyboard_octave", midi_channel, -1, "O- "),
+        "Octave Down",
+    )
+
+    return mappings
 
 PRESETS = {
     PRESET_1: {
@@ -250,7 +298,7 @@ PRESETS = {
         "display_values": False,
         "scenes": {
             1: {
-                "name": "PERFORMANCE",
+                "name": "MIXER",
                 "mappings": {
 
                     # M8 track mute controls. MIDI note numbers use C-1 = 0.
@@ -303,7 +351,24 @@ PRESETS = {
         "name": "M8",
         "context": "none",
         "display_values": False,
-        "scenes": {1: {"name": "PERFORMANCE", "mappings": {}}}
+        "scenes": {
+            1: {
+                "name": "KEYBOARD CH 5",
+                "mappings": build_keyboard_scene_mappings(0, 4),
+            },
+            2: {
+                "name": "KEYBOARD CH 6",
+                "mappings": build_keyboard_scene_mappings(18, 5),
+            },
+            3: {
+                "name": "KEYBOARD CH 7",
+                "mappings": build_keyboard_scene_mappings(36, 6),
+            },
+            4: {
+                "name": "KEYBOARD CH 8",
+                "mappings": build_keyboard_scene_mappings(54, 7),
+            },
+        }
     },
 PRESET_5: {
         "name": "MC-101",
@@ -941,6 +1006,56 @@ def send_note_pulse(out_port, channel, note, velocity=127):
     time.sleep(SELECTOR_NOTE_PULSE_SECONDS)
     send_m8_button_up(out_port, channel, note)
 
+def get_keyboard_octave(channel):
+    return keyboard_octaves.get(channel, 0)
+
+def clamp_keyboard_octave(octave):
+    return max(KEYBOARD_MIN_OCTAVE, min(KEYBOARD_MAX_OCTAVE, octave))
+
+def get_keyboard_output_note(base_note, channel):
+    return base_note + (get_keyboard_octave(channel) * 12)
+
+def send_keyboard_note(out_port, lookup_key, mapping, value, is_press):
+    clean_mapping = strip_mapping_metadata(mapping)
+    channel = clean_mapping[1]
+    base_note = clean_mapping[2]
+    state_key = (active_preset, active_scene, lookup_key)
+
+    if is_press:
+        output_note = get_keyboard_output_note(base_note, channel)
+        keyboard_active_notes[state_key] = (channel, output_note)
+        out_port.send(mido.Message(
+            "note_on",
+            channel=channel,
+            note=output_note,
+            velocity=value or 100,
+        ))
+        return
+
+    active_note = keyboard_active_notes.pop(state_key, None)
+    if active_note is None:
+        active_note = (channel, get_keyboard_output_note(base_note, channel))
+
+    active_channel, output_note = active_note
+    out_port.send(mido.Message(
+        "note_off",
+        channel=active_channel,
+        note=output_note,
+        velocity=0,
+    ))
+
+def change_keyboard_octave(mapping):
+    clean_mapping = strip_mapping_metadata(mapping)
+    channel = clean_mapping[1]
+    delta = clean_mapping[2]
+    keyboard_octaves[channel] = clamp_keyboard_octave(get_keyboard_octave(channel) + delta)
+    return keyboard_octaves[channel]
+
+def release_all_keyboard_notes(out_port):
+    for channel, note in list(keyboard_active_notes.values()):
+        out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
+    keyboard_active_notes.clear()
+
 def arrow_repeat_worker(out_port, control, channel, note, stop_event):
     """Emulate the M8 hardware arrow-key repeat while a selector is held.
 
@@ -1037,6 +1152,7 @@ def select_preset(preset_number, out_port=None):
     last_edited_val = None
     last_edited_text = None
     if out_port is not None:
+        release_all_keyboard_notes(out_port)
         release_all_navigation_notes(out_port)
     current_line1 = build_scene_line1()
     update_overlay(force_title=True)
@@ -1110,6 +1226,7 @@ def main():
         global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
         if msg.type == "sysex" and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
+            release_all_keyboard_notes(out_port)
             active_scene = msg.data[8] + 1
             active_mc101_scene_bank = get_default_mc101_scene_bank(active_scene)
             current_line1 = build_scene_line1()
@@ -1286,7 +1403,13 @@ def main():
         label = get_mapping_label(mapping)
         mapping_name = get_mapping_name(mapping, label)
 
-        if out_type == "m8_toggle_note":
+        if out_type == "keyboard_note":
+            send_keyboard_note(out_port, lookup_key, mapping, val, is_press)
+        elif out_type == "keyboard_octave":
+            if is_press:
+                octave = change_keyboard_octave(mapping)
+                last_edited_text = f"{octave:+d}"
+        elif out_type == "m8_toggle_note":
             # M8 mute/solo commands are toggle actions. The nanoKONTROL matrix
             # buttons can report the second physical press as note_off/velocity 0,
             # so every incoming edge for this mapping sends one short note pulse.
@@ -1319,7 +1442,10 @@ def main():
             last_edited_label = label
             last_edited_name = mapping_name
             last_edited_val = val if out_type == "cc" else None
-            last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
+            if out_type == "keyboard_octave":
+                last_edited_text = f"{get_keyboard_octave(clean_mapping[1]):+d}"
+            else:
+                last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
             current_line1 = build_edit_line1(label, value=last_edited_val, text=last_edited_text, name=last_edited_name)
             update_overlay()
 
@@ -1333,6 +1459,7 @@ def main():
     finally:
         if out_port is not None:
             cleanup_m8_song_row(out_port)
+            release_all_keyboard_notes(out_port)
             release_all_navigation_notes(out_port)
         in_port.close()
         out_port.close()

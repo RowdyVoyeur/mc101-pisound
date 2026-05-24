@@ -17,6 +17,11 @@ nanoKONTROL --> nanoRouterIN
 nanoRouterOUT --> M8
 nanoRouterOUT --> MC-101
 
+# Dedicated transport route.
+# MIDI Start/Stop are channel-less, so the script exposes a separate virtual
+# port for transport and amidiminder connects that port only to the MC-101.
+mc101TransportOUT --> MC-101
+
 # 3. Hardware Sync & Interface
 # Keep the hardware gear and Pisound synced together
 M8 <--> MC-101
@@ -28,3 +33,5 @@ pisound <--> M8
 nanoKONTROL -x-> M8
 nanoKONTROL -x-> MC-101
 nanoKONTROL -x-> pisound
+mc101TransportOUT -x-> M8
+mc101TransportOUT -x-> pisound
