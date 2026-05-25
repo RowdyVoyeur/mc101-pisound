@@ -7,6 +7,8 @@ import threading
 
 # --- CONFIGURATION ---
 OVERLAY_PIPE = "/tmp/m8c_overlay"
+MC101_TRANSPORT_CLIENT_NAME = "mc101TransportOUT"
+MC101_TRANSPORT_PORT_NAME = "Out"
 M8_CHANNEL = 15  # MIDI channel 16 in mido's zero-based numbering.
 MC101_CONTROL_CHANNEL = 12  # MIDI channel 13 in mido's zero-based numbering.
 MC101_SCENE_BANK_COUNT = 8
@@ -24,6 +26,11 @@ M8_ROW_HOLD_CC = 64
 M8_ROW_HOLD_VALUE = 127
 M8_ROW_RELEASE_VALUE = 0
 M8_ROW_NOTE_VELOCITY = 100
+
+# M8 keyboard configuration for Preset 4.
+M8_KEYBOARD_DEFAULT_VELOCITY = 100
+M8_KEYBOARD_MIN_OCTAVE = 0
+M8_KEYBOARD_MAX_OCTAVE = 9
 
 # Presets
 PRESET_1 = 1
@@ -97,7 +104,8 @@ arrow_repeat_lock = threading.Lock()
 toggle_states = {}
 param_states = {}
 keyboard_octaves = {}
-keyboard_active_notes = {}
+keyboard_velocity = M8_KEYBOARD_DEFAULT_VELOCITY
+keyboard_notes_held = {}
 
 # --- VALUE MAPS ---
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
@@ -142,49 +150,83 @@ def get_configured_parameter_name(mapping, fallback=None):
                 return item[PARAMETER_NAME_KEY]
     return fallback or "Parameter"
 
-KEYBOARD_BASE_NOTE_NAMES = [
-    "C-1", "C#-1", "D-1", "D#-1", "E-1", "F-1", "F#-1", "G-1",
-    "G#-1", "A-1", "A#-1", "B-1", "C0", "C#0", "D0", "D#0",
-]
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
-KEYBOARD_MIN_OCTAVE = 0
-KEYBOARD_MAX_OCTAVE = 9
+def midi_note_name(note):
+    octave = (note // 12) - 1
+    return f"{NOTE_NAMES[note % 12]}{octave}"
 
-def keyboard_short_label(note_name):
-    return note_name[:3].upper().ljust(3, " ")
+def keyboard_short_name(base_note):
+    return NOTE_NAMES[base_note % 12]
 
-def build_keyboard_scene_mappings(note_offset, midi_channel):
-    """Build one nanoKONTROL scene as a 16-key M8 keyboard.
+def keyboard_output_note(channel, base_note):
+    octave = keyboard_octaves.get(channel, 0)
+    return max(0, min(127, base_note + (octave * 12)))
 
-    note_offset is the first incoming note number for the nanoKONTROL scene.
-    midi_channel uses mido's zero-based numbering, so MIDI channel 5 is 4.
+def set_keyboard_octave(channel, octave):
+    keyboard_octaves[channel] = max(M8_KEYBOARD_MIN_OCTAVE, min(M8_KEYBOARD_MAX_OCTAVE, octave))
+    return keyboard_octaves[channel]
+
+def change_keyboard_octave(channel, direction):
+    return set_keyboard_octave(channel, keyboard_octaves.get(channel, 0) + direction)
+
+def set_keyboard_velocity(value):
+    global keyboard_velocity
+    keyboard_velocity = max(1, min(127, int(value)))
+    return keyboard_velocity
+
+
+def build_m8_cc_scene(start_cc):
+    """Build one 18-control M8 CC passthrough scene.
+
+    Incoming CC numbers are forwarded as the same CC numbers on MIDI Channel 16.
     """
+    return {
+        ("cc", cc_number): named(
+            ("cc", M8_CHANNEL, cc_number, f"C{cc_number:02d}"[-3:]),
+            f"CC{cc_number:02d}",
+        )
+        for cc_number in range(start_cc, start_cc + 18)
+    }
+
+def build_m8_keyboard_scene(midi_channel, input_offset, velocity_cc):
+    """Build one 18-button keyboard scene for Preset 4.
+
+    midi_channel is the human MIDI channel number. mido uses zero-based
+    channel numbers internally.
+    """
+    channel = midi_channel - 1
     mappings = {}
 
     for index in range(8):
-        note_name = KEYBOARD_BASE_NOTE_NAMES[index]
-        mappings[("note", note_offset + index)] = named(
-            ("keyboard_note", midi_channel, index, keyboard_short_label(note_name)),
-            f"Key {note_name}",
+        mappings[("note", input_offset + index)] = named(
+            ("keyboard_note", channel, index, keyboard_short_name(index)),
+            midi_note_name(index),
         )
 
-    mappings[("note", note_offset + 8)] = named(
-        ("keyboard_octave", midi_channel, 1, "O+ "),
-        "Octave Up",
+    mappings[("note", input_offset + 8)] = named(
+        ("keyboard_octave", channel, 1, "OC+"),
+        "Octave +",
     )
 
     for index in range(8):
-        base_note = index + 8
-        note_name = KEYBOARD_BASE_NOTE_NAMES[base_note]
-        mappings[("note", note_offset + 9 + index)] = named(
-            ("keyboard_note", midi_channel, base_note, keyboard_short_label(note_name)),
-            f"Key {note_name}",
+        base_note = 8 + index
+        mappings[("note", input_offset + 9 + index)] = named(
+            ("keyboard_note", channel, base_note, keyboard_short_name(base_note)),
+            midi_note_name(base_note),
         )
 
-    mappings[("note", note_offset + 17)] = named(
-        ("keyboard_octave", midi_channel, -1, "O- "),
-        "Octave Down",
+    mappings[("note", input_offset + 17)] = named(
+        ("keyboard_octave", channel, -1, "OC-"),
+        "Octave -",
     )
+
+    mappings[("cc", velocity_cc)] = named(("keyboard_velocity", "VEL"), "Velocity")
+    for cc_number in range(velocity_cc + 1, velocity_cc + 18):
+        mappings[("cc", cc_number)] = named(
+            ("cc", M8_CHANNEL, cc_number, f"C{cc_number:02d}"[-3:]),
+            f"CC {cc_number:02d}",
+        )
 
     return mappings
 
@@ -344,7 +386,10 @@ PRESETS = {
                     ("cc", 17): named(("cc", M8_CHANNEL, 17, "V09"), "Volume Track 9"),
 
                 }
-            }
+            },
+            2: {"name": "PERFORMANCE 1", "mappings": build_m8_cc_scene(18)},
+            3: {"name": "PERFORMANCE 2", "mappings": build_m8_cc_scene(36)},
+            4: {"name": "PERFORMANCE 3", "mappings": build_m8_cc_scene(54)},
         }
     },
     PRESET_4: {
@@ -352,40 +397,13 @@ PRESETS = {
         "context": "none",
         "display_values": False,
         "scenes": {
-            1: {
-                "name": "KEYBOARD CH 5",
-                "mappings": build_keyboard_scene_mappings(0, 4),
-            },
-            2: {
-                "name": "KEYBOARD CH 6",
-                "mappings": build_keyboard_scene_mappings(18, 5),
-            },
-            3: {
-                "name": "KEYBOARD CH 7",
-                "mappings": build_keyboard_scene_mappings(36, 6),
-            },
-            4: {
-                "name": "KEYBOARD CH 8",
-                "mappings": build_keyboard_scene_mappings(54, 7),
-            },
+            1: {"name": "KEYBOARD CH 5", "mappings": build_m8_keyboard_scene(5, 0, 0)},
+            2: {"name": "KEYBOARD CH 6", "mappings": build_m8_keyboard_scene(6, 18, 18)},
+            3: {"name": "KEYBOARD CH 7", "mappings": build_m8_keyboard_scene(7, 36, 36)},
+            4: {"name": "KEYBOARD CH 8", "mappings": build_m8_keyboard_scene(8, 54, 54)},
         }
     },
-PRESET_5: {
-        "name": "MC-101",
-        "context": "track",
-        "default_track": 2,
-        "display_values": True,
-        "scenes": {
-            1: {
-                "name": "TRACK 2",
-                "mappings": {
-                    ("cc", 0): named(("cc", 1, 74, "CUT"), "Cutoff"),
-                    ("cc", 1): named(("cc", 1, 71, "RES"), "Resonance"),
-                }
-            }
-        }
-    },
-    PRESET_6: {
+    PRESET_5: {
         "name": "MC-101",
         "context": "drum",
         "default_track": 1,
@@ -412,7 +430,7 @@ PRESET_5: {
             }
         }
     },
-    PRESET_7: {
+    PRESET_6: {
         "name": "MC-101",
         "context": "partial",
         "default_track": 1,
@@ -546,6 +564,21 @@ PRESET_5: {
                     ("note", 29): named(("partial_select", 3, "P03"), "Partial"),
                     ("note", 30): named(("partial_select", 4, "P04"), "Partial"),
                     ("note", 31): named(("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"), "Partial Switch"),
+                }
+            }
+        }
+    },
+    PRESET_7: {
+        "name": "MC-101",
+        "context": "track",
+        "default_track": 2,
+        "display_values": True,
+        "scenes": {
+            1: {
+                "name": "TRACK 2",
+                "mappings": {
+                    ("cc", 0): named(("cc", 1, 74, "CUT"), "Cutoff"),
+                    ("cc", 1): named(("cc", 1, 71, "RES"), "Resonance"),
                 }
             }
         }
@@ -843,6 +876,12 @@ def get_mapping_label(mapping):
         return f"PD{(active_pad_bank * 4 + clean_mapping[1]):02d}"
     if out_type == "drum_pad_bank":
         return clean_mapping[2]
+    if out_type == "keyboard_note":
+        return clean_mapping[3]
+    if out_type == "keyboard_octave":
+        return clean_mapping[3]
+    if out_type == "keyboard_velocity":
+        return clean_mapping[1]
 
     for item in clean_mapping[3:]:
         if isinstance(item, str) and item != "toggle":
@@ -857,6 +896,10 @@ def get_mapping_name(mapping, fallback=None):
             return mc101_scene_name(clean_mapping[1])
         if out_type == "mc101_scene_bank":
             return mc101_scene_bank_name(clean_mapping[1])
+        if out_type == "keyboard_note":
+            return midi_note_name(keyboard_output_note(clean_mapping[1], clean_mapping[2]))
+        if out_type in ("keyboard_octave", "keyboard_velocity"):
+            return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
     return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
 
 def get_target_fields(mapping, out_type):
@@ -1000,61 +1043,43 @@ def release_all_navigation_notes(out_port):
     for note in range(8):
         send_m8_button_up(out_port, M8_CHANNEL, note)
 
+def release_all_keyboard_notes(out_port):
+    keyboard_notes = list(set(keyboard_notes_held.values()))
+    keyboard_notes_held.clear()
+    for channel, note in keyboard_notes:
+        out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
+
+def send_keyboard_note(out_port, lookup_key, channel, base_note, is_press):
+    held_key = (channel, lookup_key)
+
+    if is_press:
+        output_note = keyboard_output_note(channel, base_note)
+        keyboard_notes_held[held_key] = (channel, output_note)
+        out_port.send(mido.Message(
+            "note_on",
+            channel=channel,
+            note=output_note,
+            velocity=keyboard_velocity,
+        ))
+        return output_note
+
+    output_channel, output_note = keyboard_notes_held.pop(
+        held_key,
+        (channel, keyboard_output_note(channel, base_note)),
+    )
+    out_port.send(mido.Message(
+        "note_off",
+        channel=output_channel,
+        note=output_note,
+        velocity=0,
+    ))
+    return output_note
+
 def send_note_pulse(out_port, channel, note, velocity=127):
     """Send one short M8 button press: note-on followed by note-off."""
     send_m8_button_down(out_port, channel, note, velocity)
     time.sleep(SELECTOR_NOTE_PULSE_SECONDS)
     send_m8_button_up(out_port, channel, note)
-
-def get_keyboard_octave(channel):
-    return keyboard_octaves.get(channel, 0)
-
-def clamp_keyboard_octave(octave):
-    return max(KEYBOARD_MIN_OCTAVE, min(KEYBOARD_MAX_OCTAVE, octave))
-
-def get_keyboard_output_note(base_note, channel):
-    return base_note + (get_keyboard_octave(channel) * 12)
-
-def send_keyboard_note(out_port, lookup_key, mapping, value, is_press):
-    clean_mapping = strip_mapping_metadata(mapping)
-    channel = clean_mapping[1]
-    base_note = clean_mapping[2]
-    state_key = (active_preset, active_scene, lookup_key)
-
-    if is_press:
-        output_note = get_keyboard_output_note(base_note, channel)
-        keyboard_active_notes[state_key] = (channel, output_note)
-        out_port.send(mido.Message(
-            "note_on",
-            channel=channel,
-            note=output_note,
-            velocity=value or 100,
-        ))
-        return
-
-    active_note = keyboard_active_notes.pop(state_key, None)
-    if active_note is None:
-        active_note = (channel, get_keyboard_output_note(base_note, channel))
-
-    active_channel, output_note = active_note
-    out_port.send(mido.Message(
-        "note_off",
-        channel=active_channel,
-        note=output_note,
-        velocity=0,
-    ))
-
-def change_keyboard_octave(mapping):
-    clean_mapping = strip_mapping_metadata(mapping)
-    channel = clean_mapping[1]
-    delta = clean_mapping[2]
-    keyboard_octaves[channel] = clamp_keyboard_octave(get_keyboard_octave(channel) + delta)
-    return keyboard_octaves[channel]
-
-def release_all_keyboard_notes(out_port):
-    for channel, note in list(keyboard_active_notes.values()):
-        out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
-    keyboard_active_notes.clear()
 
 def arrow_repeat_worker(out_port, control, channel, note, stop_event):
     """Emulate the M8 hardware arrow-key repeat while a selector is held.
@@ -1128,6 +1153,9 @@ def select_preset(preset_number, out_port=None):
     global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text, current_line1
 
+    if out_port is not None:
+        release_all_keyboard_notes(out_port)
+
     active_preset = preset_number
     preset_data = PRESETS.get(active_preset, {})
 
@@ -1152,7 +1180,6 @@ def select_preset(preset_number, out_port=None):
     last_edited_val = None
     last_edited_text = None
     if out_port is not None:
-        release_all_keyboard_notes(out_port)
         release_all_navigation_notes(out_port)
     current_line1 = build_scene_line1()
     update_overlay(force_title=True)
@@ -1203,15 +1230,42 @@ def schedule_matrix_swap(preset_number, scene_number, trigger_time):
         last_touched_type = "note"
         update_overlay()
 
+def send_transport_message(transport_out_port, command):
+    """Send MIDI transport only through the dedicated MC-101 transport port.
+
+    MIDI Start/Stop are system realtime messages and have no MIDI channel, so
+    they must not go through nanoRouterOUT. amidiminder should connect this
+    dedicated virtual port only to the MC-101.
+    """
+    if transport_out_port is None:
+        print(f"MC-101 transport output unavailable. Transport '{command}' was not sent.")
+        return
+
+    if command == "start":
+        transport_out_port.send(mido.Message("start"))
+    elif command == "stop":
+        transport_out_port.send(mido.Message("stop"))
+    else:
+        print(f"Unknown MIDI transport command: {command}")
+
 # --- MAIN MIDI ROUTER ---
 def main():
     global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank, active_m8_row_note
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text
     global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
+    in_port = None
+    out_port = None
+    transport_out_port = None
+
     try:
         in_port = mido.open_input("In", virtual=True, client_name="nanoRouterIN")
         out_port = mido.open_output("Out", virtual=True, client_name="nanoRouterOUT")
+        transport_out_port = mido.open_output(
+            MC101_TRANSPORT_PORT_NAME,
+            virtual=True,
+            client_name=MC101_TRANSPORT_CLIENT_NAME,
+        )
     except Exception as exc:
         sys.exit(f"Failed: {exc}")
 
@@ -1369,6 +1423,28 @@ def main():
                 update_overlay()
             return
 
+        if out_type == "keyboard_velocity":
+            if msg.type == "control_change":
+                velocity = set_keyboard_velocity(val)
+                last_edited_label = get_mapping_label(mapping)
+                last_edited_name = get_mapping_name(mapping, "Velocity")
+                last_edited_val = velocity
+                last_edited_text = None
+                current_line1 = build_edit_line1(last_edited_label, value=velocity, name=last_edited_name)
+                update_overlay()
+            return
+
+        if out_type == "keyboard_octave":
+            if is_press:
+                octave = change_keyboard_octave(clean_mapping[1], clean_mapping[2])
+                last_edited_label = get_mapping_label(mapping)
+                last_edited_name = get_mapping_name(mapping)
+                last_edited_val = octave
+                last_edited_text = f"+{octave}"
+                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
         if out_type == "mc101_scene_bank":
             if is_press:
                 active_mc101_scene_bank = clean_mapping[1]
@@ -1404,11 +1480,9 @@ def main():
         mapping_name = get_mapping_name(mapping, label)
 
         if out_type == "keyboard_note":
-            send_keyboard_note(out_port, lookup_key, mapping, val, is_press)
-        elif out_type == "keyboard_octave":
+            played_note = send_keyboard_note(out_port, lookup_key, clean_mapping[1], clean_mapping[2], is_press)
             if is_press:
-                octave = change_keyboard_octave(mapping)
-                last_edited_text = f"{octave:+d}"
+                mapping_name = midi_note_name(played_note)
         elif out_type == "m8_toggle_note":
             # M8 mute/solo commands are toggle actions. The nanoKONTROL matrix
             # buttons can report the second physical press as note_off/velocity 0,
@@ -1429,12 +1503,7 @@ def main():
         elif out_type == "midi_transport":
             if is_press:
                 command = clean_mapping[1]
-                if command == "start":
-                    out_port.send(mido.Message("start"))
-                elif command == "stop":
-                    out_port.send(mido.Message("stop"))
-                else:
-                    print(f"Unknown MIDI transport command: {command}")
+                send_transport_message(transport_out_port, command)
         elif out_type == "cc":
             out_port.send(mido.Message("control_change", channel=clean_mapping[1], control=clean_mapping[2], value=val))
 
@@ -1442,10 +1511,7 @@ def main():
             last_edited_label = label
             last_edited_name = mapping_name
             last_edited_val = val if out_type == "cc" else None
-            if out_type == "keyboard_octave":
-                last_edited_text = f"{get_keyboard_octave(clean_mapping[1]):+d}"
-            else:
-                last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
+            last_edited_text = None if out_type == "cc" else ("ON" if val > 0 else "OFF")
             current_line1 = build_edit_line1(label, value=last_edited_val, text=last_edited_text, name=last_edited_name)
             update_overlay()
 
@@ -1461,8 +1527,12 @@ def main():
             cleanup_m8_song_row(out_port)
             release_all_keyboard_notes(out_port)
             release_all_navigation_notes(out_port)
-        in_port.close()
-        out_port.close()
+        if in_port is not None:
+            in_port.close()
+        if out_port is not None:
+            out_port.close()
+        if transport_out_port is not None:
+            transport_out_port.close()
 
 if __name__ == "__main__":
     main()
