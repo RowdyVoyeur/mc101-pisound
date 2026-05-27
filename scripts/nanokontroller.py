@@ -81,8 +81,7 @@ active_scene = 1
 active_track = 1
 active_partial = 1
 active_pad = 1
-active_pad_bank = 1
-active_drum_velocity = 100
+active_pad_bank = 0
 active_mc101_scene_bank = 0
 active_m8_row_note = None
 
@@ -107,7 +106,7 @@ param_states = {}
 keyboard_octaves = {}
 keyboard_velocity = M8_KEYBOARD_DEFAULT_VELOCITY
 keyboard_notes_held = {}
-drum_pad_notes_held = {}
+active_drum_velocity = 100
 
 # --- VALUE MAPS ---
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
@@ -118,6 +117,14 @@ SYN_WAVE_LABELS = {i: f"{i+1:02d}" for i in range(48)}
 CRS_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(16, 113)}
 FIN_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(14, 115)}
 PAN_LABELS = {i: f"R{i-64}" if i > 64 else (f"L{64-i}" if i < 64 else "C") for i in range(128)}
+DRUM_KEY_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(40, 89)}
+DRUM_FINE_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(14, 115)}
+DRUM_200_OFFSET_VALUES = list(range(28, 229))
+DRUM_200_OFFSET_LABELS = {i: f"+{i-128}" if i > 128 else str(i-128) for i in range(28, 229)}
+DRUM_OUTPUT_ASSIGN_LABELS = {
+    0: "DRY", 1: "MFX", 2: "CP1", 3: "CP2",
+    4: "CP3", 5: "CP4", 6: "CP5", 7: "CP6",
+}
 ST1_LABELS = {0: "OFF", 1: "SNC", 2: "RNG", 3: "XMD", 4: "XM2"}
 TVF_TYP_LABELS = {0: "OFF", 1: "LPF", 2: "BPF", 3: "HPF", 4: "PKG", 5: "LP2", 6: "LP3"}
 ENV_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
@@ -126,26 +133,6 @@ SLP_LABELS = {0: "-12", 1: "-18", 2: "-24"}
 KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
 
 PAD_NOTES = [37, 39, 42, 46, 49, 51, 54, 56, 36, 38, 41, 45, 48, 62, 63, 64]
-DRUM_KEY_MIN = 22
-DRUM_KEY_MAX = 108
-DRUM_PAD_WINDOW_SIZE = 8
-DRUM_PAD_NOTE_BUTTONS = list(range(9, 17))  # A-1 to E0, C-1 = 0.
-DRUM_PAD_BANK_PREVIOUS_NOTE = 17            # F0.
-DRUM_PAD_BANK_NEXT_NOTE = 8                 # G#-1.
-
-# The first two windows preserve the MC-101's physical pad layout. Remaining
-# windows expose every chromatic drum key from Key#22 to Key#108 in groups of 8.
-DRUM_PAD_WINDOWS = [
-    [37, 39, 42, 46, 49, 51, 54, 56],  # Physical pads 1-8.
-    [36, 38, 41, 45, 48, 62, 63, 64],  # Physical pads 9-16.
-]
-for _start in range(DRUM_KEY_MIN, DRUM_KEY_MAX + 1, DRUM_PAD_WINDOW_SIZE):
-    _window = list(range(_start, min(_start + DRUM_PAD_WINDOW_SIZE, DRUM_KEY_MAX + 1)))
-    if _window not in DRUM_PAD_WINDOWS:
-        DRUM_PAD_WINDOWS.append(_window)
-
-DRUM_OFFSET_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(128)}
-MUTE_GROUP_LABELS = {i: f"{i:02d}" for i in range(32)}
 
 # Mapping metadata helpers.
 # Long, human-readable names live inside each mapping using named(...).
@@ -249,6 +236,69 @@ def build_m8_keyboard_scene(midi_channel, input_offset, velocity_cc):
             ("cc", M8_CHANNEL, cc_number, f"C{cc_number:02d}"[-3:]),
             f"CC {cc_number:02d}",
         )
+
+    return mappings
+
+def drum_key_to_pad_number(key):
+    """Return MC-101 physical pad number for the standard 16 pad keys."""
+    try:
+        return PAD_NOTES.index(int(key)) + 1
+    except ValueError:
+        return int(key)
+
+def drum_key_short_name(key):
+    pad_number = drum_key_to_pad_number(key)
+    if 1 <= pad_number <= 16:
+        return f"P{pad_number:02d}"
+    return f"{int(key):03d}"
+
+def drum_key_long_name(key):
+    pad_number = drum_key_to_pad_number(key)
+    if 1 <= pad_number <= 16:
+        return f"Drum Pad {pad_number:02d}"
+    return f"Drum Pad {int(key):03d}"
+
+def build_drum_pad_scene(track, offset):
+    """Build Preset 5 drum editor scene for one nanoKONTROL scene.
+
+    Scene number selects the MC-101 track. The 16 note buttons play/select the
+    standard MC-101 drum pads, while the selected key is stored as the actual
+    drum key/pitch so the SysEx addresses work for the full Key#22..108 range.
+    """
+    mappings = {}
+
+    first_row_keys = [37, 39, 42, 46, 49, 51, 54, 56]
+    second_row_keys = [36, 38, 41, 45, 48, 62, 63, 64]
+
+    for index, key in enumerate(first_row_keys):
+        mappings[("note", offset + index)] = named(
+            ("drum_pad_key_select", track, key, drum_key_short_name(key)),
+            drum_key_long_name(key),
+        )
+
+    for index, key in enumerate(second_row_keys):
+        mappings[("note", offset + 9 + index)] = named(
+            ("drum_pad_key_select", track, key, drum_key_short_name(key)),
+            drum_key_long_name(key),
+        )
+
+    cc = lambda base_cc: offset + base_cc
+
+    # Drum Kit Partial offsets from the Roland/Fantom PCMR_PTL block.
+    mappings[("cc", cc(0))] = named(("drum_sysex_partial", 0x000A, 127, "PAN", 1, None, PAN_LABELS), "Pan")
+    mappings[("cc", cc(1))] = named(("drum_sysex_partial", 0x0011, 200, "CUT", "nibbles2", DRUM_200_OFFSET_VALUES, DRUM_200_OFFSET_LABELS), "Cutoff Offset")
+    mappings[("cc", cc(2))] = named(("drum_sysex_partial", 0x0013, 200, "RES", "nibbles2", DRUM_200_OFFSET_VALUES, DRUM_200_OFFSET_LABELS), "Resonance Offset")
+    mappings[("cc", cc(3))] = named(("drum_sysex_partial", 0x000F, 48, "KEY", 1, list(range(40, 89)), DRUM_KEY_LABELS), "Key Offset")
+    mappings[("cc", cc(4))] = named(("drum_sysex_partial", 0x0010, 100, "FIN", 1, list(range(14, 115)), DRUM_FINE_LABELS), "Fine Tune Offset")
+    mappings[("cc", cc(5))] = named(("drum_sysex_partial", 0x000E, 7, "OUT", 1, None, DRUM_OUTPUT_ASSIGN_LABELS), "Output Assign")
+    mappings[("cc", cc(6))] = named(("drum_sysex_partial", 0x000D, 31, "MUT", 1), "Mute Group")
+    mappings[("cc", cc(8))] = named(("drum_pad_velocity", "VEL"), "Pad Velocity")
+    mappings[("cc", cc(9))] = named(("drum_sysex_partial", 0x0009, 127, "LEV", 1), "Level")
+    mappings[("cc", cc(10))] = named(("drum_sysex_partial", 0x0015, 200, "ATK", "nibbles2", DRUM_200_OFFSET_VALUES, DRUM_200_OFFSET_LABELS), "Attack Offset")
+    mappings[("cc", cc(11))] = named(("drum_sysex_partial", 0x0017, 200, "DCY", "nibbles2", DRUM_200_OFFSET_VALUES, DRUM_200_OFFSET_LABELS), "Decay Offset")
+    mappings[("cc", cc(12))] = named(("drum_sysex_partial", 0x0019, 200, "REL", "nibbles2", DRUM_200_OFFSET_VALUES, DRUM_200_OFFSET_LABELS), "Release Offset")
+    mappings[("cc", cc(13))] = named(("drum_sysex_partial", 0x000B, 127, "CHO", 1), "Chorus/Delay Send")
+    mappings[("cc", cc(14))] = named(("drum_sysex_partial", 0x000C, 127, "REV", 1), "Reverb Send")
 
     return mappings
 
@@ -426,55 +476,15 @@ PRESETS = {
         }
     },
     PRESET_5: {
-        "name": "MC-101",
+        "name": "MC-101 DRUM",
         "context": "drum",
         "default_track": 1,
         "display_values": True,
         "scenes": {
-            1: {
-                "name": "DRUM PADS",
-                "mappings": {
-                    # Track selectors. MIDI note numbers use C-1 = 0.
-                    ("note", 0): named(("track_select", 1, "T01"), "Track 1"),
-                    ("note", 1): named(("track_select", 2, "T02"), "Track 2"),
-                    ("note", 2): named(("track_select", 3, "T03"), "Track 3"),
-                    ("note", 3): named(("track_select", 4, "T04"), "Track 4"),
-
-                    # Pad-bank navigation.
-                    #   G#-1 = next 8 pads
-                    #   F0   = previous 8 pads
-                    ("note", 8): named(("drum_pad_bank", 1, "NXT"), "Next Drum Pad Set"),
-                    ("note", 17): named(("drum_pad_bank", -1, "PRV"), "Previous Drum Pad Set"),
-
-                    # A-1 to E0 select and play the currently visible 8 drum keys.
-                    # Default window is physical pads 9-16. Use PRV for physical pads 1-8.
-                    ("note", 9): named(("drum_pad_select", 0), "Drum Pad"),
-                    ("note", 10): named(("drum_pad_select", 1), "Drum Pad"),
-                    ("note", 11): named(("drum_pad_select", 2), "Drum Pad"),
-                    ("note", 12): named(("drum_pad_select", 3), "Drum Pad"),
-                    ("note", 13): named(("drum_pad_select", 4), "Drum Pad"),
-                    ("note", 14): named(("drum_pad_select", 5), "Drum Pad"),
-                    ("note", 15): named(("drum_pad_select", 6), "Drum Pad"),
-                    ("note", 16): named(("drum_pad_select", 7), "Drum Pad"),
-
-                    # Drum Kit Partial parameters for the selected Track + Drum Key.
-                    ("cc", 0): named(("drum_sysex_partial", 0x000A, 127, "PAN", 1, None, PAN_LABELS), "Pan"),
-                    ("cc", 1): named(("drum_sysex_partial", 0x0011, 127, "CUT", 1, None, DRUM_OFFSET_LABELS), "Cutoff Offset"),
-                    ("cc", 2): named(("drum_sysex_partial", 0x0013, 127, "RES", 1, None, DRUM_OFFSET_LABELS), "Resonance Offset"),
-                    ("cc", 3): named(("drum_sysex_partial", 0x000F, 127, "KEY", 1, None, DRUM_OFFSET_LABELS), "Key Offset"),
-                    ("cc", 4): named(("drum_sysex_partial", 0x0010, 127, "FIN", 1, None, DRUM_OFFSET_LABELS), "Fine Tune Offset"),
-                    ("cc", 5): named(("drum_sysex_partial", 0x000D, 31, "MUT", 1, None, MUTE_GROUP_LABELS), "Mute Group"),
-
-                    ("cc", 8): named(("drum_velocity", "VEL"), "Drum Pad Velocity"),
-
-                    ("cc", 9): named(("drum_sysex_partial", 0x0009, 127, "LEV", 1), "Level"),
-                    ("cc", 10): named(("drum_sysex_partial", 0x0015, 127, "ATK", 1, None, DRUM_OFFSET_LABELS), "Attack Offset"),
-                    ("cc", 11): named(("drum_sysex_partial", 0x0017, 127, "DEC", 1, None, DRUM_OFFSET_LABELS), "Decay Offset"),
-                    ("cc", 12): named(("drum_sysex_partial", 0x0019, 127, "REL", 1, None, DRUM_OFFSET_LABELS), "Release Offset"),
-                    ("cc", 13): named(("drum_sysex_partial", 0x000B, 127, "CHO", 1), "Delay Send"),
-                    ("cc", 14): named(("drum_sysex_partial", 0x000C, 127, "REV", 1), "Reverb Send"),
-                }
-            }
+            1: {"name": "DRUM T1", "mappings": build_drum_pad_scene(1, 0)},
+            2: {"name": "DRUM T2", "mappings": build_drum_pad_scene(2, 18)},
+            3: {"name": "DRUM T3", "mappings": build_drum_pad_scene(3, 36)},
+            4: {"name": "DRUM T4", "mappings": build_drum_pad_scene(4, 54)},
         }
     },
     PRESET_6: {
@@ -662,6 +672,8 @@ def send_sysex(out_port, address, value, size):
     addr_bytes = [(address >> 24) & 0x7F, (address >> 16) & 0x7F, (address >> 8) & 0x7F, address & 0x7F]
     if size == 4:
         data_bytes = [(value >> 12) & 0x0F, (value >> 8) & 0x0F, (value >> 4) & 0x0F, value & 0x0F]
+    elif size == "nibbles2":
+        data_bytes = [(value >> 4) & 0x0F, value & 0x0F]
     elif size == 2:
         data_bytes = [(value >> 7) & 0x7F, value & 0x7F]
     else:
@@ -677,52 +689,23 @@ def get_mc101_address(track, partial, param_offset):
     partial_offset_int = (partial - 1) * 128
     return add_roland_address(base, to_7bit_hex(partial_offset_int), param_offset)
 
-
-def clamp_drum_key(key):
-    return max(DRUM_KEY_MIN, min(DRUM_KEY_MAX, int(key)))
-
-def drum_pad_window(bank=None):
-    index = active_pad_bank if bank is None else bank
-    return DRUM_PAD_WINDOWS[index % len(DRUM_PAD_WINDOWS)]
-
-def drum_pad_key_for_slot(slot_index):
-    window = drum_pad_window()
-    if not window:
-        return DRUM_KEY_MIN
-    slot = max(0, min(DRUM_PAD_WINDOW_SIZE - 1, int(slot_index)))
-    if slot >= len(window):
-        return window[-1]
-    return window[slot]
-
-def drum_pad_short_name(key):
-    return f"{clamp_drum_key(key):03d}"
-
-def drum_pad_long_name(key):
-    return f"Drum Pad {clamp_drum_key(key):03d}"
-
-def drum_pad_index_for_key(key):
-    if key in PAD_NOTES:
-        return PAD_NOTES.index(key) + 1
-    return None
-
-def drum_pad_display_text(key):
-    physical = drum_pad_index_for_key(key)
-    if physical is not None:
-        return f"{drum_pad_short_name(key)} P{physical:02d}"
-    return drum_pad_short_name(key)
-
 def get_drum_partial_address(track, pad, param_offset):
     drum_bases = {1: 0x32400000, 2: 0x32730000, 3: 0x33260000, 4: 0x33590000}
     base = drum_bases.get(track, 0x32400000)
-    # Backwards-compatible behaviour:
-    #   pad 1..16 means the MC-101 physical pad index.
-    #   pad 22..108 means the actual drum key number.
-    if 1 <= int(pad) <= len(PAD_NOTES):
+
+    # The drum partial map is keyed by MIDI pitch/key number.
+    # For backwards compatibility, pad values 1..16 still resolve through
+    # the physical MC-101 PAD_NOTES list. Values 22..108 are treated as direct
+    # drum keys, which lets Preset 5 address the full Drum Kit Partial range.
+    if 22 <= int(pad) <= 108:
+        pad_key = int(pad)
+    elif 1 <= int(pad) <= len(PAD_NOTES):
         pad_key = PAD_NOTES[int(pad) - 1]
     else:
-        pad_key = clamp_drum_key(pad)
-    pad_offset_int = to_7bit_int(0x001600) + (pad_key - 21) * 128
-    return add_roland_address(base, to_7bit_hex(pad_offset_int), param_offset)
+        pad_key = int(pad)
+
+    key_offset_addr = (0x16 + (pad_key - 21)) << 8
+    return add_roland_address(base, key_offset_addr, param_offset)
 
 # --- HUD HELPERS ---
 def get_value_text(value=None, text=None):
@@ -736,22 +719,23 @@ def get_value_text(value=None, text=None):
         return str(last_edited_val)
     return ""
 
+def get_drum_edit_target_path():
+    return f"MC-101 > T{active_track:02d} > {drum_key_short_name(active_pad)}"
+
 def get_edit_target_path(preset_name):
     preset_data = PRESETS.get(active_preset, {})
     context = preset_data.get("context", "none")
+
+    if context == "drum":
+        return get_drum_edit_target_path()
+
     parts = [preset_name]
 
-    if context in ("track", "partial", "drum"):
+    if context in ("track", "partial"):
         parts.append(f"T{active_track:02d}")
 
     if context == "partial":
         parts.append(f"P{active_partial:02d}")
-    elif context == "drum":
-        if 1 <= int(active_pad) <= len(PAD_NOTES):
-            key = PAD_NOTES[int(active_pad) - 1]
-        else:
-            key = active_pad
-        parts.append(drum_pad_short_name(key))
 
     return " > ".join(parts)
 
@@ -759,6 +743,9 @@ def build_preset_line1():
     return PRESETS.get(active_preset, {}).get("name", "NONE")
 
 def build_scene_line1():
+    if active_preset == PRESET_5 and 1 <= active_scene <= 4:
+        return f"MC-101 > DRUM TRACK {active_scene}"
+
     preset_data = PRESETS.get(active_preset, {})
     scene_data = preset_data.get("scenes", {}).get(active_scene, {})
     return f"{preset_data.get('name', 'NONE')} > {scene_data.get('name', f'S{active_scene}')}"
@@ -863,11 +850,28 @@ def mc101_scene_bank_label(bank_index):
 def mc101_scene_bank_name(bank_index):
     return f"Scene Bank {bank_index + 1:02d}"
 
+def drum_parameter_display_name(name):
+    if not name:
+        return "Parameter"
+    replacements = {
+        "Cutoff Offset": "Cutoff",
+        "Resonance Offset": "Resonance",
+        "Key Offset": "Key",
+        "Fine Tune Offset": "Fine Tune",
+        "Attack Offset": "Attack",
+        "Decay Offset": "Decay",
+        "Release Offset": "Release",
+    }
+    return replacements.get(str(name), str(name))
+
 def build_edit_line1(label=None, value=None, text=None, name=None):
     preset_name = PRESETS.get(active_preset, {}).get("name", "NONE")
     parameter_name = name or last_edited_name or label or "Parameter"
     value_text = get_value_text(value=value, text=text)
     base = get_edit_target_path(preset_name)
+
+    if PRESET_5 == active_preset:
+        parameter_name = drum_parameter_display_name(parameter_name)
 
     if value_text:
         return f"{base} > {parameter_name}: {value_text}"
@@ -963,12 +967,14 @@ def get_mapping_label(mapping):
         return mc101_scene_bank_label(clean_mapping[1])
     if out_type == "drum_sysex_partial":
         return clean_mapping[3]
+    if out_type == "drum_pad_key_select":
+        return clean_mapping[3]
+    if out_type == "drum_pad_velocity":
+        return clean_mapping[1]
     if out_type == "drum_pad_select":
-        return drum_pad_short_name(drum_pad_key_for_slot(clean_mapping[1]))
+        return f"PD{(active_pad_bank * 4 + clean_mapping[1]):02d}"
     if out_type == "drum_pad_bank":
         return clean_mapping[2]
-    if out_type == "drum_velocity":
-        return clean_mapping[1]
     if out_type == "keyboard_note":
         return clean_mapping[3]
     if out_type == "keyboard_octave":
@@ -989,14 +995,10 @@ def get_mapping_name(mapping, fallback=None):
             return mc101_scene_name(clean_mapping[1])
         if out_type == "mc101_scene_bank":
             return mc101_scene_bank_name(clean_mapping[1])
-        if out_type == "drum_pad_select":
-            return drum_pad_long_name(drum_pad_key_for_slot(clean_mapping[1]))
-        if out_type == "drum_pad_bank":
-            return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
-        if out_type == "drum_velocity":
-            return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
         if out_type == "keyboard_note":
             return midi_note_name(keyboard_output_note(clean_mapping[1], clean_mapping[2]))
+        if out_type in ("drum_pad_key_select", "drum_pad_velocity"):
+            return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
         if out_type in ("keyboard_octave", "keyboard_velocity"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
     return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
@@ -1249,12 +1251,11 @@ def handle_selector_cc(out_port, control, value, suppress_navigation=False):
     stop_arrow_repeat(out_port, control, M8_CHANNEL, note)
 
 def select_preset(preset_number, out_port=None):
-    global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank, active_drum_velocity, active_mc101_scene_bank
+    global active_preset, active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text, current_line1
 
     if out_port is not None:
         release_all_keyboard_notes(out_port)
-    drum_pad_notes_held.clear()
 
     active_preset = preset_number
     preset_data = PRESETS.get(active_preset, {})
@@ -1271,9 +1272,8 @@ def select_preset(preset_number, out_port=None):
         active_track = preset_data["default_track"]
 
     active_partial = 1
-    active_pad = 1
-    active_pad_bank = 1 if preset_data.get("context") == "drum" else 0
-    active_drum_velocity = 100
+    active_pad = 37 if preset_number == PRESET_5 else 1
+    active_pad_bank = 0
     active_mc101_scene_bank = get_default_mc101_scene_bank(active_scene)
 
     last_edited_label = None
@@ -1351,7 +1351,7 @@ def send_transport_message(transport_out_port, command):
 
 # --- MAIN MIDI ROUTER ---
 def main():
-    global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_drum_velocity, active_mc101_scene_bank, active_m8_row_note, drum_pad_notes_held
+    global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank, active_m8_row_note, active_drum_velocity
     global last_edited_label, last_edited_name, last_edited_val, last_edited_text
     global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
@@ -1376,13 +1376,15 @@ def main():
     update_overlay()
 
     def midi_callback(msg):
-        global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_drum_velocity, active_mc101_scene_bank, active_m8_row_note, drum_pad_notes_held
+        global active_scene, active_track, active_partial, active_pad, active_pad_bank, active_mc101_scene_bank, active_m8_row_note, active_drum_velocity
         global last_edited_label, last_edited_name, last_edited_val, last_edited_text
         global last_sysex_time, last_touched_type, last_interaction_time, current_line1
 
         if msg.type == "sysex" and msg.data[:8] == (66, 75, 0, 1, 4, 0, 95, 79):
             release_all_keyboard_notes(out_port)
             active_scene = msg.data[8] + 1
+            if active_preset == PRESET_5 and 1 <= active_scene <= 4:
+                active_track = active_scene
             active_mc101_scene_bank = get_default_mc101_scene_bank(active_scene)
             current_line1 = build_scene_line1()
             update_overlay(force_title=True)
@@ -1459,42 +1461,59 @@ def main():
             update_overlay()
             return
 
-        if out_type == "drum_pad_select":
-            pad_key = drum_pad_key_for_slot(clean_mapping[1])
+        if out_type == "drum_pad_key_select":
+            pad_track = clean_mapping[1]
+            pad_key = clean_mapping[2]
+            pad_label = clean_mapping[3]
 
             if is_press:
+                active_track = pad_track
                 active_pad = pad_key
-                drum_pad_notes_held[lookup_key] = (active_track - 1, pad_key)
-                last_edited_label = drum_pad_short_name(pad_key)
-                last_edited_name = drum_pad_long_name(pad_key)
+                last_edited_label = pad_label
+                last_edited_name = get_mapping_name(mapping, drum_key_long_name(pad_key))
                 last_edited_val = None
-                last_edited_text = drum_pad_display_text(pad_key)
-                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                last_edited_text = pad_label
+                current_line1 = get_drum_edit_target_path()
                 out_port.send(mido.Message("note_on", channel=active_track - 1, note=pad_key, velocity=active_drum_velocity))
                 update_overlay()
             else:
-                note_to_release = drum_pad_notes_held.pop(lookup_key, (active_track - 1, pad_key))
-                out_port.send(mido.Message("note_off", channel=note_to_release[0], note=note_to_release[1], velocity=0))
+                out_port.send(mido.Message("note_off", channel=pad_track - 1, note=pad_key, velocity=0))
+            return
+
+        if out_type == "drum_pad_select":
+            selected_pad = active_pad_bank * 4 + clean_mapping[1]
+            pad_note = PAD_NOTES[selected_pad - 1]
+
+            if is_press:
+                active_pad = selected_pad
+                last_edited_label = f"PD{selected_pad:02d}"
+                last_edited_name = get_mapping_name(mapping, "Pad")
+                last_edited_val = None
+                last_edited_text = f"PD{selected_pad:02d}"
+                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                out_port.send(mido.Message("note_on", channel=active_track - 1, note=pad_note, velocity=val))
+                update_overlay()
+            else:
+                out_port.send(mido.Message("note_off", channel=active_track - 1, note=pad_note, velocity=0))
             return
 
         if out_type == "drum_pad_bank" and is_press:
-            active_pad_bank = (active_pad_bank + clean_mapping[1]) % len(DRUM_PAD_WINDOWS)
-            window = drum_pad_window()
+            active_pad_bank = (active_pad_bank + clean_mapping[1]) % 4
             last_edited_label = clean_mapping[2]
-            last_edited_name = get_mapping_name(mapping, "Pad Set")
+            last_edited_name = get_mapping_name(mapping, "Pad Bank")
             last_edited_val = None
-            last_edited_text = f"{drum_pad_short_name(window[0])}-{drum_pad_short_name(window[-1])}"
+            last_edited_text = clean_mapping[2]
             current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
-            update_overlay(force_title=True)
+            update_overlay()
             return
 
-        if out_type == "drum_velocity":
+        if out_type == "drum_pad_velocity":
             if msg.type == "control_change":
-                active_drum_velocity = max(0, min(127, val))
-                last_edited_label = clean_mapping[1]
-                last_edited_name = get_mapping_name(mapping, "Drum Pad Velocity")
+                active_drum_velocity = max(1, min(127, int(val)))
+                last_edited_label = get_mapping_label(mapping)
+                last_edited_name = get_mapping_name(mapping, "Pad Velocity")
                 last_edited_val = active_drum_velocity
-                last_edited_text = None
+                last_edited_text = str(active_drum_velocity)
                 current_line1 = build_edit_line1(last_edited_label, value=active_drum_velocity, name=last_edited_name)
                 update_overlay()
             return
@@ -1640,9 +1659,6 @@ def main():
         if out_port is not None:
             cleanup_m8_song_row(out_port)
             release_all_keyboard_notes(out_port)
-            for channel, note in list(drum_pad_notes_held.values()):
-                out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
-            drum_pad_notes_held.clear()
             release_all_navigation_notes(out_port)
         if in_port is not None:
             in_port.close()
