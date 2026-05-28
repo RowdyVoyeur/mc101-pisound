@@ -107,6 +107,8 @@ keyboard_octaves = {}
 keyboard_velocity = M8_KEYBOARD_DEFAULT_VELOCITY
 keyboard_notes_held = {}
 active_drum_velocity = 100
+drum_scene_octave_offsets = {1: 0, 2: 0, 3: 0, 4: 0}
+drum_pad_notes_held = {}
 
 # --- VALUE MAPS ---
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
@@ -246,17 +248,49 @@ def drum_key_to_pad_number(key):
     except ValueError:
         return int(key)
 
+def drum_key_is_editable(key):
+    return 22 <= int(key) <= 108
+
 def drum_key_short_name(key):
+    key = int(key)
+    if not drum_key_is_editable(key):
+        return "---"
     pad_number = drum_key_to_pad_number(key)
     if 1 <= pad_number <= 16:
         return f"P{pad_number:02d}"
-    return f"{int(key):03d}"
+    return f"{key:03d}"
 
 def drum_key_long_name(key):
+    key = int(key)
+    if not drum_key_is_editable(key):
+        return "---"
     pad_number = drum_key_to_pad_number(key)
     if 1 <= pad_number <= 16:
         return f"Drum Pad {pad_number:02d}"
-    return f"Drum Pad {int(key):03d}"
+    return f"Drum Pad {key:03d}"
+
+def clamp_midi_note(note):
+    return max(0, min(127, int(note)))
+
+def get_drum_scene_octave_offset(scene=None):
+    scene_number = active_scene if scene is None else scene
+    return drum_scene_octave_offsets.get(scene_number, 0)
+
+def shifted_drum_key(base_key, scene=None):
+    return int(base_key) + get_drum_scene_octave_offset(scene)
+
+def get_drum_octave_label(scene=None):
+    offset = get_drum_scene_octave_offset(scene)
+    octave = offset // 12
+    if octave > 0:
+        return f"+{octave}"
+    if octave < 0:
+        return str(octave)
+    return "0"
+
+def build_drum_octave_line1(scene=None):
+    scene_number = active_scene if scene is None else scene
+    return f"MC-101 > DRUM TRACK {scene_number} > OCT {get_drum_octave_label(scene_number)}"
 
 def build_drum_pad_scene(track, offset):
     """Build Preset 5 drum editor scene for one nanoKONTROL scene.
@@ -300,6 +334,14 @@ def build_drum_pad_scene(track, offset):
     mappings[("cc", cc(13))] = named(("drum_sysex_partial", 0x000B, 127, "CHO", 1), "Chorus/Delay Send")
     mappings[("cc", cc(14))] = named(("drum_sysex_partial", 0x000C, 127, "REV", 1), "Reverb Send")
 
+    # Octave navigation for the 16 pad-select/play notes in this scene.
+    # Scene 1: G#-1 up / F0 down
+    # Scene 2: D1 up / B1 down
+    # Scene 3: G#2 up / F3 down
+    # Scene 4: D4 up / B4 down
+    mappings[("note", offset + 8)] = named(("drum_scene_octave", track, 12, "OC+"), "Octave Up")
+    mappings[("note", offset + 17)] = named(("drum_scene_octave", track, -12, "OC-"), "Octave Down")
+
     return mappings
 
 PRESETS = {
@@ -309,7 +351,7 @@ PRESETS = {
         "display_values": False,
         "scenes": {
             1: {
-                "name": "CONTROLLER",
+                "name": "Controller",
                 "mappings": {
 
                     # Requested Preset 1 M8 button mappings. MIDI note numbers use C-1 = 0.
@@ -323,8 +365,8 @@ PRESETS = {
                     # MIDI note numbers use C-1 = 0:
                     #   C-1 = 0  -> MIDI Stop
                     #   A-1  = 9 -> MIDI Start
-                    ("note", 0): named(("midi_transport", "stop", "STOP", "MST"), "MC-101 Stop"),
-                    ("note", 9): named(("midi_transport", "start", "START", "MPL"), "MC-101 Play"),
+                    ("note", 0): named(("midi_transport", "stop", "Stop", "MST"), "MC-101 Stop"),
+                    ("note", 9): named(("midi_transport", "start", "Start", "MPL"), "MC-101 Play"),
                 }
             }
         }
@@ -335,7 +377,7 @@ PRESETS = {
         "display_values": True,
         "scenes": {
             1: {
-                "name": "LIVE (01-08)",
+                "name": "Live (01-08)",
                 "default_scene_bank": 0,
                 "mappings": {
                     # Scene trigge)r buttons. The selected bank decides which
@@ -365,12 +407,12 @@ PRESETS = {
                     # MIDI note numbers use C-1 = 0:
                     #   G#-1 = 8  -> MIDI Stop
                     #   F0  = 17 -> MIDI Start
-                    ("note", 8): named(("midi_transport", "stop", "STOP", "STP"), "STOP"),
-                    ("note", 17): named(("midi_transport", "start", "START", "PLA"), "PLAY"),
+                    ("note", 8): named(("midi_transport", "stop", "Stop", "STP"), "Stop"),
+                    ("note", 17): named(("midi_transport", "start", "Start", "PLA"), "Play"),
                 }
             },
             2: {
-                "name": "LIVE (09-16)",
+                "name": "Live (09-16)",
                 "default_scene_bank": 8,
                 "mappings": {
                     # Same layout as Scene 1, but offset to nanoKONTROL Scene 2
@@ -400,8 +442,8 @@ PRESETS = {
                     # MIDI note numbers use C-1 = 18 in nanoKONTROL Scene 2:
                     #   G#-1 = 26 -> MIDI Stop
                     #   F0  = 35 -> MIDI Start
-                    ("note", 26): named(("midi_transport", "stop", "STOP", "STP"), "STOP"),
-                    ("note", 35): named(("midi_transport", "start", "START", "PLA"), "PLAY"),
+                    ("note", 26): named(("midi_transport", "stop", "Stop", "STP"), "Stop"),
+                    ("note", 35): named(("midi_transport", "start", "Start", "PLA"), "Play"),
                 }
             }
         }
@@ -476,7 +518,7 @@ PRESETS = {
         }
     },
     PRESET_5: {
-        "name": "MC-101 DRUM",
+        "name": "MC-101",
         "context": "drum",
         "default_track": 1,
         "display_values": True,
@@ -494,80 +536,80 @@ PRESETS = {
         "display_values": True,
         "scenes": {
             1: {
-                "name": "OSC & COM",
+                "name": "Common & Oscillator",
                 "mappings": {
-                    ("cc", 0): named(("sysex", 0x3E00, 4, "OTY", 1, OSC_TYPE_LABELS), "Oscillator Type"),
+                    ("cc", 0): named(("sysex", 0x3E00, 4, "OTY", 1, OSC_TYPE_LABELS), "Osc Type"),
                     ("cc", 1): ("conditional_sysex", ("cc", 0), {
                         0: named((None, 0, "---", 1), "Unavailable"),
-                        1: named((0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS), "Wave"),
+                        1: named((0x3E01, 8, "WAV", 1, None, VA_WAVE_LABELS), "Wave Form"),
                         2: named((None, 0, "---", 1), "Unavailable"),
                         3: named((None, 0, "---", 1), "Unavailable")
                     }),
                     ("cc", 2): ("conditional_sysex", ("cc", 0), {
-                        0: named(([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], BANK_LABELS), "Bank"),
+                        0: named(([0x201C, 0x2034], 2, "BNK", 4, [8, 10, 11], BANK_LABELS), "Wave Bank"),
                         1: named((0x3E06, 127, "PW ", 1), "Pulse Width"),
-                        2: named((0x3E02, 47, "WAV", 4, None, SYN_WAVE_LABELS), "Wave"),
+                        2: named((0x3E02, 47, "WAV", 4, None, SYN_WAVE_LABELS), "Sync Wave"),
                         3: named((0x3E08, 127, "DET", 1), "Detune")
                     }),
                     ("cc", 3): ("conditional_sysex", ("cc", 0), {
                         0: ("bank_dependent", {
-                            8: named(([0x2020, 0x2038], 963, "WAV", 4), "Wave"),
-                            10: named(([0x2020, 0x2038], 257, "WAV", 4), "Wave"),
-                            11: named(([0x2020, 0x2038], 620, "WAV", 4), "Wave")
+                            8: named(([0x2020, 0x2038], 963, "WAV", 4), "Wave Number"),
+                            10: named(([0x2020, 0x2038], 257, "WAV", 4), "Wave Number"),
+                            11: named(([0x2020, 0x2038], 620, "WAV", 4), "Wave Number")
                         }),
                         1: named((0x3E07, 126, "PWD", 1, list(range(1, 128)), PWD_LABELS), "Pulse Width Depth"),
                         2: named((None, 0, "---", 1), "Unavailable"),
                         3: named((None, 0, "---", 1), "Unavailable")
                     }),
-                    ("cc", 4): named(("sysex_track", 0x3D00, 4, "ST1", 1, ST1_LABELS), "Structure 1"),
+                    ("cc", 4): named(("sysex_track", 0x3D00, 4, "ST1", 1, ST1_LABELS), "Structure 1-2"),
                     ("cc", 5): ("conditional_sysex_track", ("cc", 4), {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((None, 0, "---", 1), "Unavailable"),
-                        2: named((0x3D02, 127, "RNG", 1), "Ring Mod Range"),
-                        3: named((0x3D08, 10800, "MOD", 4), "Modulation"),
-                        4: named((0x3D15, 127, "MOD", 1), "Modulation")
+                        2: named((0x3D02, 127, "RNG", 1), "Ring Level"),
+                        3: named((0x3D08, 10800, "MOD", 4), "Mod Depth"),
+                        4: named((0x3D15, 127, "MOD", 1), "Md Depth")
                     }),
                     ("cc", 13): ("conditional_sysex_track", ("cc", 4), {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((None, 0, "---", 1), "Unavailable"),
-                        2: named((0x3D04, 127, "LV1", 1), "Level 1"),
-                        3: named((0x3D10, 127, "LV1", 1), "Level 1"),
-                        4: named((0x3D10, 127, "LV1", 1), "Level 1")
+                        2: named((0x3D04, 127, "LV1", 1), "Osc1 Level"),
+                        3: named((0x3D10, 127, "LV1", 1), "Osc1 Level"),
+                        4: named((0x3D10, 127, "LV1", 1), "Osc1 Level")
                     }),
                     ("cc", 14): ("conditional_sysex_track", ("cc", 4), {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((None, 0, "---", 1), "Unavailable"),
-                        2: named((0x3D05, 127, "LV2", 1), "Level 2"),
-                        3: named((0x3D11, 127, "LV2", 1), "Level 2"),
-                        4: named((0x3D11, 127, "LV2", 1), "Level 2")
+                        2: named((0x3D05, 127, "LV2", 1), "Osc2 Level"),
+                        3: named((0x3D11, 127, "LV2", 1), "Osc2 Level"),
+                        4: named((0x3D11, 127, "LV2", 1), "Osc2 Level")
                     }),
-                    ("cc", 6): named(("sysex_track", 0x3D01, 4, "ST3", 1, ST1_LABELS), "Structure 3"),
+                    ("cc", 6): named(("sysex_track", 0x3D01, 4, "ST3", 1, ST1_LABELS), "Structure 3-4"),
                     ("cc", 7): ("conditional_sysex_track", ("cc", 6), {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((None, 0, "---", 1), "Unavailable"),
-                        2: named((0x3D03, 127, "RNG", 1), "Ring Mod Range"),
-                        3: named((0x3D0C, 10800, "MOD", 4), "Modulation"),
-                        4: named((0x3D16, 127, "MOD", 1), "Modulation")
+                        2: named((0x3D03, 127, "RNG", 1), "Ring Level"),
+                        3: named((0x3D0C, 10800, "MOD", 4), "Mod Depth"),
+                        4: named((0x3D16, 127, "MOD", 1), "Mod Depth")
                     }),
                     ("cc", 15): ("conditional_sysex_track", ("cc", 6), {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((None, 0, "---", 1), "Unavailable"),
-                        2: named((0x3D06, 127, "LV3", 1), "Level 3"),
-                        3: named((0x3D12, 127, "LV3", 1), "Level 3"),
-                        4: named((0x3D12, 127, "LV3", 1), "Level 3")
+                        2: named((0x3D06, 127, "LV3", 1), "Osc3 Level"),
+                        3: named((0x3D12, 127, "LV3", 1), "Osc3 Level"),
+                        4: named((0x3D12, 127, "LV3", 1), "Osc3 Level")
                     }),
                     ("cc", 16): ("conditional_sysex_track", ("cc", 6), {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((None, 0, "---", 1), "Unavailable"),
-                        2: named((0x3D07, 127, "LV4", 1), "Level 4"),
-                        3: named((0x3D13, 127, "LV4", 1), "Level 4"),
-                        4: named((0x3D13, 127, "LV4", 1), "Level 4")
+                        2: named((0x3D07, 127, "LV4", 1), "Osc4 Level"),
+                        3: named((0x3D13, 127, "LV4", 1), "Osc4 Level"),
+                        4: named((0x3D13, 127, "LV4", 1), "Osc4 Level")
                     }),
                     ("cc", 8): named(("sysex_track", 0x001C, 127, "ANL", 1), "Analog Feel"),
                     ("cc", 17): named(("sysex_track", 0x0024, 1023, "TIM", 4), "Portamento Time"),
                     ("note", 8): named(("sysex_track", 0x001D, 1, "M/P", 1, {0: "MNO", 1: "PLY"}, "toggle"), "Mono/Poly"),
                     ("note", 16): named(("sysex_track", 0x0021, 1, "PRM", 1, {0: "NRM", 1: "LGT"}, "toggle"), "Portamento Mode"),
-                    ("note", 17): named(("sysex_track", 0x0020, 1, "PRT", 1, {0: "OFF", 1: "ON"}, "toggle"), "Portamento"),
+                    ("note", 17): named(("sysex_track", 0x0020, 1, "PRT", 1, {0: "OFF", 1: "ON"}, "toggle"), "Portamento Switch"),
                     ("note", 7): named(("sysex_track", 0x3C00, 1, "UNS", 1, {0: "OFF", 1: "ON"}, "toggle"), "Unison"),
                     ("cc", 9): named(("sysex", 0x2001, 96, "CRS", 1, list(range(16, 113)), CRS_LABELS), "Coarse Tune"),
                     ("cc", 10): named(("sysex", 0x2002, 100, "FIN", 1, list(range(14, 115)), FIN_LABELS), "Fine Tune"),
@@ -599,7 +641,7 @@ PRESETS = {
                 }
             },
             2: {
-                "name": "FIL & ENV",
+                "name": "Filter & Envelope",
                 "mappings": {
                     ("cc", 18): named(("sysex", 0x2031, 6, "TYP", 1, TVF_TYP_LABELS), "Filter Type"),
                     ("cc", 19): named(("sysex", 0x2032, 1023, "CUT", 4), "Cutoff"),
@@ -641,10 +683,10 @@ PRESETS = {
         }
     },
     PRESET_8: {
-        "name": "EMPTY",
+        "name": "MC-101",
         "context": "none",
         "display_values": False,
-        "scenes": {1: {"name": "EMPTY", "mappings": {}}}
+        "scenes": {1: {"name": "Keyboard", "mappings": {}}}
     }, 
 }
 
@@ -968,6 +1010,8 @@ def get_mapping_label(mapping):
     if out_type == "drum_sysex_partial":
         return clean_mapping[3]
     if out_type == "drum_pad_key_select":
+        return drum_key_short_name(shifted_drum_key(clean_mapping[2]))
+    if out_type == "drum_scene_octave":
         return clean_mapping[3]
     if out_type == "drum_pad_velocity":
         return clean_mapping[1]
@@ -997,7 +1041,9 @@ def get_mapping_name(mapping, fallback=None):
             return mc101_scene_bank_name(clean_mapping[1])
         if out_type == "keyboard_note":
             return midi_note_name(keyboard_output_note(clean_mapping[1], clean_mapping[2]))
-        if out_type in ("drum_pad_key_select", "drum_pad_velocity"):
+        if out_type == "drum_pad_key_select":
+            return drum_key_long_name(shifted_drum_key(clean_mapping[2]))
+        if out_type in ("drum_pad_velocity", "drum_scene_octave"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
         if out_type in ("keyboard_octave", "keyboard_velocity"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
@@ -1461,23 +1507,41 @@ def main():
             update_overlay()
             return
 
+        if out_type == "drum_scene_octave":
+            if is_press:
+                scene_number = active_scene
+                direction = clean_mapping[2]
+                current_offset = drum_scene_octave_offsets.get(scene_number, 0)
+                drum_scene_octave_offsets[scene_number] = max(-60, min(60, current_offset + direction))
+                last_edited_label = clean_mapping[3]
+                last_edited_name = get_mapping_name(mapping, "Drum Octave")
+                last_edited_val = None
+                last_edited_text = get_drum_octave_label(scene_number)
+                current_line1 = build_drum_octave_line1(scene_number)
+                update_overlay()
+            return
+
         if out_type == "drum_pad_key_select":
             pad_track = clean_mapping[1]
-            pad_key = clean_mapping[2]
-            pad_label = clean_mapping[3]
+            base_pad_key = clean_mapping[2]
+            pad_key = shifted_drum_key(base_pad_key)
+            play_note = clamp_midi_note(pad_key)
+            pad_label = drum_key_short_name(pad_key)
 
             if is_press:
                 active_track = pad_track
                 active_pad = pad_key
                 last_edited_label = pad_label
-                last_edited_name = get_mapping_name(mapping, drum_key_long_name(pad_key))
+                last_edited_name = drum_key_long_name(pad_key)
                 last_edited_val = None
                 last_edited_text = pad_label
                 current_line1 = get_drum_edit_target_path()
-                out_port.send(mido.Message("note_on", channel=active_track - 1, note=pad_key, velocity=active_drum_velocity))
+                drum_pad_notes_held[lookup_key] = (active_track - 1, play_note)
+                out_port.send(mido.Message("note_on", channel=active_track - 1, note=play_note, velocity=active_drum_velocity))
                 update_overlay()
             else:
-                out_port.send(mido.Message("note_off", channel=pad_track - 1, note=pad_key, velocity=0))
+                held = drum_pad_notes_held.pop(lookup_key, (pad_track - 1, play_note))
+                out_port.send(mido.Message("note_off", channel=held[0], note=held[1], velocity=0))
             return
 
         if out_type == "drum_pad_select":
@@ -1536,6 +1600,16 @@ def main():
 
                 state_context = f"P{active_pad}" if out_type == "drum_sysex_partial" else ("track" if is_track_level else active_partial)
                 param_states[(active_track, state_context, lookup_key)] = f_val
+
+                if out_type == "drum_sysex_partial" and not drum_key_is_editable(active_pad):
+                    last_sysex_time = now
+                    last_edited_label = label
+                    last_edited_name = long_name
+                    last_edited_val = None
+                    last_edited_text = "---"
+                    current_line1 = get_drum_edit_target_path()
+                    update_overlay()
+                    return
 
                 for offset in offsets:
                     if out_type == "drum_sysex_partial":
