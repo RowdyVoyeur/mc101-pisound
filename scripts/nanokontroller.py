@@ -131,8 +131,23 @@ ST1_LABELS = {0: "OFF", 1: "SNC", 2: "RNG", 3: "XMD", 4: "XM2"}
 TVF_TYP_LABELS = {0: "OFF", 1: "LPF", 2: "BPF", 3: "HPF", 4: "PKG", 5: "LP2", 6: "LP3"}
 ENV_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
 FILTER_TYPE_LABELS = {0: "TVF", 1: "VCF"}
+VCF_TYPE_LABELS = {1: "FLAT", 2: "TYPE-JP", 3: "TYPE-M", 4: "TYPE-P"}
+LFO_WAVE_LABELS = {
+    0: "SIN", 1: "TRI", 2: "SAW-UP", 3: "SAW-DW", 4: "SQR",
+    5: "RND", 6: "TRP", 7: "S&H", 8: "CHS", 9: "VSIN", 10: "STEP",
+}
+LFO_RATE_NOTE_LABELS = {
+    0: "1/64T", 1: "1/64", 2: "1/32T", 3: "1/32", 4: "1/16T",
+    5: "1/32.", 6: "1/16", 7: "1/8T", 8: "1/16.", 9: "1/8",
+    10: "1/4T", 11: "1/8.", 12: "1/4", 13: "1/2T", 14: "1/4.",
+    15: "1/2", 16: "1T", 17: "1/2.", 18: "1", 19: "2T",
+    20: "1.", 21: "2", 22: "4",
+}
+LFO_FADE_MODE_LABELS = {0: "ON-IN", 1: "ON-OUT", 2: "OFF-IN", 3: "OFF-OUT"}
 SLP_LABELS = {0: "-12", 1: "-18", 2: "-24"}
 KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
+PITCH_ENV_LEVEL_VALUES = list(range(513, 1536))
+PITCH_ENV_LEVEL_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(513, 1536)}
 
 PAD_NOTES = [37, 39, 42, 46, 49, 51, 54, 56, 36, 38, 41, 45, 48, 62, 63, 64]
 
@@ -643,7 +658,10 @@ PRESETS = {
             2: {
                 "name": "Filter & Envelope",
                 "mappings": {
-                    ("cc", 18): named(("sysex", 0x2031, 6, "TYP", 1, TVF_TYP_LABELS), "Filter Type"),
+                    ("cc", 18): ("conditional_sysex", ("cc", 22), {
+                        0: named((0x2031, 6, "TYP", 1, TVF_TYP_LABELS), "TVF Filter Type"),
+                        1: named((0x3E12, 4, "FTY", 1, [1, 2, 3, 4], VCF_TYPE_LABELS), "VCF Type"),
+                    }),
                     ("cc", 19): named(("sysex", 0x2032, 1023, "CUT", 4), "Cutoff"),
                     ("cc", 20): named(("sysex", 0x203D, 1023, "RES", 4), "Resonance"),
                     ("cc", 21): named(("sysex", 0x2800, 126, "ENV", 1, list(range(1, 128)), ENV_LABELS), "Filter Envelope"),
@@ -654,15 +672,80 @@ PRESETS = {
                         0: named((None, 0, "---", 1), "Unavailable"),
                         1: named((0x3E0A, 1023, "HPF", 4), "High-pass Cutoff")
                     }),
+                    ("cc", 26): named(("sysex", 0x3E11, 127, "FAT", 1), "Fat"),
+                    ("cc", 27): named(("sysex", 0x2808, 1023, "F-A", 4), "TVF T1 Attack"),
+                    ("cc", 28): named(("sysex", 0x2810, 1023, "F-D", 4), "TVF T3 Deacy"),
+                    ("cc", 29): named(("sysex", 0x2824, 1023, "F-S", 4), "TVF L3 Sustain"),
+                    ("cc", 30): named(("sysex", 0x2814, 1023, "F-R", 4), "TVF T4 Release"),
+                    ("cc", 31): ("conditional_sysex", ("note", 26), {
+                        0: named((0x2C04, 1023, "A-A", 4), "TVA T1 Attack"),
+                        1: named((0x2400, 200, "PED", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "Pitch Env Depth"),
+                    }),
+                    ("cc", 32): ("conditional_sysex", ("note", 26), {
+                        0: named((0x2C0C, 1023, "A-D", 4), "TVA T3 Deacy"),
+                        1: named((0x2408, 1023, "P-A", 4), "Pitch Env Attack"),
+                    }),
+                    ("cc", 33): ("conditional_sysex", ("note", 26), {
+                        0: named((0x2C1C, 1023, "A-S", 4), "TVA L3 Sustain"),
+                        1: named((0x2424, 1022, "P-S", 4, PITCH_ENV_LEVEL_VALUES, PITCH_ENV_LEVEL_LABELS), "Pitch Env Sustain"),
+                    }),
+                    ("cc", 34): ("conditional_sysex", ("note", 26), {
+                        0: named((0x2C10, 1023, "A-R", 4), "TVA T4 Release"),
+                        1: named((0x2410, 1023, "P-D", 4), "Pitch Env Deacy"),
+                    }),
                     ("note", 18): named(("track_select", 1, "T01"), "Track"),
                     ("note", 19): named(("track_select", 2, "T02"), "Track"),
                     ("note", 20): named(("track_select", 3, "T03"), "Track"),
                     ("note", 21): named(("track_select", 4, "T04"), "Track"),
+                    ("note", 26): named(("param_mode_toggle", ("note", 26), "AMP", "PIT", "TVA Env", "Pitch Env"), "Amp/Pitch Env Mode"),
                     ("note", 27): named(("partial_select", 1, "P01"), "Partial"),
                     ("note", 28): named(("partial_select", 2, "P02"), "Partial"),
                     ("note", 29): named(("partial_select", 3, "P03"), "Partial"),
                     ("note", 30): named(("partial_select", 4, "P04"), "Partial"),
                     ("note", 31): named(("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"), "Partial Switch"),
+                    ("note", 35): named(("sysex", 0x3E10, 1, "ADS", 1, {0: "OFF", 1: "ON"}, "toggle"), "ADSREnv Switch"),
+                }
+            },
+            3: {
+                "name": "LFO 1/2",
+                "mappings": {
+                    ("note", 36): named(("track_select", 1, "T01"), "Track"),
+                    ("note", 37): named(("track_select", 2, "T02"), "Track"),
+                    ("note", 38): named(("track_select", 3, "T03"), "Track"),
+                    ("note", 39): named(("track_select", 4, "T04"), "Track"),
+                    ("cc", 36): named(("sysex", 0x3000, 10, "1WT", 1, LFO_WAVE_LABELS), "LFO1 Wave Type"),
+                    ("cc", 37): ("conditional_sysex", ("note", 42), {
+                        0: named((0x3004, 1023, "1RT", 4), "LFO1 Rate"),
+                        1: named((0x3002, 22, "1RN", 1, LFO_RATE_NOTE_LABELS), "LFO1 Rate Note"),
+                    }),
+                    ("cc", 38): named(("sysex", 0x300B, 1023, "1DT", 4), "LFO1 Delay Time"),
+                    ("cc", 39): named(("sysex", 0x3012, 1023, "1FT", 4), "LFO1 Fade Time"),
+                    ("cc", 40): named(("sysex", 0x304F, 10, "2WT", 1, LFO_WAVE_LABELS), "LFO2 Wave Type"),
+                    ("cc", 41): ("conditional_sysex", ("note", 51), {
+                        0: named((0x3053, 1023, "2RT", 4), "LFO2 Rate"),
+                        1: named((0x3052, 22, "2RN", 1, LFO_RATE_NOTE_LABELS), "LFO2 Rate Note"),
+                    }),
+                    ("cc", 42): named(("sysex", 0x305A, 1023, "2DT", 4), "LFO2 Delay Time"),
+                    ("cc", 43): named(("sysex", 0x3061, 1023, "2FT", 4), "LFO2 Fade Time"),
+                    ("cc", 45): named(("sysex", 0x301B, 200, "1AD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO1 Amp Depth"),
+                    ("cc", 46): named(("sysex", 0x301D, 200, "1PD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO1 Pan Depth"),
+                    ("cc", 47): named(("sysex", 0x3019, 200, "1FD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO1 Filter Depth"),
+                    ("cc", 48): named(("sysex", 0x3017, 200, "1XD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO1 Pitch Depth"),
+                    ("cc", 49): named(("sysex", 0x306A, 200, "2AD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO2 Amp Depth"),
+                    ("cc", 50): named(("sysex", 0x306C, 200, "2PD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO2 Pan Depth"),
+                    ("cc", 51): named(("sysex", 0x3068, 200, "2FD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO2 Filter Depth"),
+                    ("cc", 52): named(("sysex", 0x3066, 200, "2XD", "nibbles2", list(range(28, 229)), DRUM_200_OFFSET_LABELS), "LFO2 Pitch Depth"),
+                    ("note", 42): named(("sysex", 0x3001, 1, "1RS", 1, {0: "OFF", 1: "ON"}, "toggle"), "LFO1 Rate Sync"),
+                    ("note", 43): named(("sysex", 0x3016, 1, "1KT", 1, {0: "OFF", 1: "ON"}, "toggle"), "LFO1 Key Trigger"),
+                    ("note", 44): named(("cycle_sysex", 0x3011, 3, "1FM", 1, LFO_FADE_MODE_LABELS), "LFO1 Fade Mode"),
+                    ("note", 45): named(("partial_select", 1, "P01"), "Partial"),
+                    ("note", 46): named(("partial_select", 2, "P02"), "Partial"),
+                    ("note", 47): named(("partial_select", 3, "P03"), "Partial"),
+                    ("note", 48): named(("partial_select", 4, "P04"), "Partial"),
+                    ("note", 49): named(("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"), "Partial Switch"),
+                    ("note", 51): named(("sysex", 0x3050, 1, "2RS", 1, {0: "OFF", 1: "ON"}, "toggle"), "LFO2 Rate Sync"),
+                    ("note", 52): named(("sysex", 0x3065, 1, "2KT", 1, {0: "OFF", 1: "ON"}, "toggle"), "LFO2 Key Trigger"),
+                    ("note", 53): named(("cycle_sysex", 0x3060, 3, "2FM", 1, LFO_FADE_MODE_LABELS), "LFO2 Fade Mode"),
                 }
             }
         }
@@ -1015,6 +1098,12 @@ def get_mapping_label(mapping):
         return clean_mapping[3]
     if out_type == "drum_pad_velocity":
         return clean_mapping[1]
+    if out_type == "param_mode_toggle":
+        mode_key = clean_mapping[1]
+        short_off = clean_mapping[2]
+        short_on = clean_mapping[3]
+        mode_value = param_states.get((active_track, active_partial, mode_key), 0)
+        return short_on if mode_value else short_off
     if out_type == "drum_pad_select":
         return f"PD{(active_pad_bank * 4 + clean_mapping[1]):02d}"
     if out_type == "drum_pad_bank":
@@ -1025,6 +1114,8 @@ def get_mapping_label(mapping):
         return clean_mapping[3]
     if out_type == "keyboard_velocity":
         return clean_mapping[1]
+    if out_type == "cycle_sysex":
+        return clean_mapping[3] if len(clean_mapping) > 3 else "---"
 
     for item in clean_mapping[3:]:
         if isinstance(item, str) and item != "toggle":
@@ -1043,9 +1134,9 @@ def get_mapping_name(mapping, fallback=None):
             return midi_note_name(keyboard_output_note(clean_mapping[1], clean_mapping[2]))
         if out_type == "drum_pad_key_select":
             return drum_key_long_name(shifted_drum_key(clean_mapping[2]))
-        if out_type in ("drum_pad_velocity", "drum_scene_octave"):
+        if out_type in ("drum_pad_velocity", "drum_scene_octave", "param_mode_toggle"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
-        if out_type in ("keyboard_octave", "keyboard_velocity"):
+        if out_type in ("keyboard_octave", "keyboard_velocity", "cycle_sysex"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
     return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
 
@@ -1486,6 +1577,57 @@ def main():
             new_state = not toggle_states.get(state_key, False)
             toggle_states[state_key] = new_state
             val = 127 if new_state else 0
+
+        if out_type == "param_mode_toggle":
+            if is_press:
+                mode_key = clean_mapping[1]
+                short_off = clean_mapping[2]
+                short_on = clean_mapping[3]
+                name_off = clean_mapping[4]
+                name_on = clean_mapping[5]
+                current_mode = param_states.get((active_track, active_partial, mode_key), 0)
+                new_mode = 0 if current_mode else 1
+                param_states[(active_track, active_partial, mode_key)] = new_mode
+                last_edited_label = short_on if new_mode else short_off
+                last_edited_name = name_on if new_mode else name_off
+                last_edited_val = None
+                last_edited_text = last_edited_label
+                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
+        if out_type == "cycle_sysex":
+            if is_press:
+                target_fields = clean_mapping[1:]
+                long_name = get_configured_parameter_name(mapping, clean_mapping[3] if len(clean_mapping) > 3 else "Parameter")
+                target = parse_target_fields(target_fields, long_name)
+                if not target:
+                    return
+                offsets, max_value, label, size, value_list, text_map, long_name = target
+                state_key = (active_preset, active_scene, lookup_key, active_track, active_partial)
+                current_value = param_states.get(state_key, -1)
+                if value_list:
+                    try:
+                        idx = value_list.index(current_value)
+                    except ValueError:
+                        idx = -1
+                    f_val = value_list[(idx + 1) % len(value_list)]
+                else:
+                    f_val = (int(current_value) + 1) % (int(max_value) + 1)
+                param_states[state_key] = f_val
+
+                for offset in offsets:
+                    address = get_mc101_address(active_track, active_partial, offset)
+                    send_sysex(out_port, address, f_val, size)
+
+                last_sysex_time = time.time()
+                last_edited_label = label
+                last_edited_name = long_name
+                last_edited_val = f_val
+                last_edited_text = text_map.get(f_val) if text_map else None
+                current_line1 = build_edit_line1(label, value=last_edited_val, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
 
         if out_type == "track_select" and is_press:
             active_track = clean_mapping[1]
