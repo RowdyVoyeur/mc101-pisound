@@ -144,6 +144,41 @@ LFO_RATE_NOTE_LABELS = {
     20: "1.", 21: "2", 22: "4",
 }
 LFO_FADE_MODE_LABELS = {0: "ON-IN", 1: "ON-OUT", 2: "OFF-IN", 3: "OFF-OUT"}
+
+MATRIX_SOURCE_LABELS = {0: "OFF"}
+for i in range(1, 32):
+    MATRIX_SOURCE_LABELS[i] = f"CC{i:02d}"
+for i in range(33, 96):
+    MATRIX_SOURCE_LABELS[i - 1] = f"CC{i:02d}"
+MATRIX_SOURCE_LABELS.update({
+    95: "BEND",
+    96: "AFT",
+    97: "SC1",
+    98: "SC2",
+    99: "SC3",
+    100: "SC4",
+    101: "VEL",
+    102: "KEY",
+    103: "TMP",
+    104: "LF1",
+    105: "LF2",
+    106: "PEN",
+    107: "FEN",
+    108: "AEN",
+})
+
+MATRIX_DEST_LABELS = {
+    0: "OFF", 1: "PCH", 2: "CUT", 3: "RES", 4: "LEV", 5: "PAN", 6: "CHO", 7: "REV",
+    8: "PL1", 9: "PL2", 10: "FL1", 11: "FL2", 12: "AL1", 13: "AL2", 14: "PN1", 15: "PN2",
+    16: "L1R", 17: "L2R", 18: "P-A", 19: "P-D", 20: "P-R", 21: "F-A", 22: "F-D", 23: "F-R",
+    24: "A-A", 25: "A-D", 26: "A-R", 27: "PMT", 28: "FXM", 29: "MC1", 30: "MC2", 31: "MC3",
+    32: "MC4", 33: "PW", 34: "PWM", 35: "FAT", 36: "XMD", 37: "L1S", 38: "L2S", 39: "SSD",
+    40: "PDP", 41: "FDP", 42: "ADP", 43: "XM2", 44: "ATT", 45: "R1L", 46: "R2L", 47: "X1L", 48: "X2L",
+}
+
+MATRIX_SENS_VALUES = list(range(1, 128))
+MATRIX_SENS_LABELS = {i: f"+{i-64}" if i > 64 else str(i-64) for i in range(1, 128)}
+
 SLP_LABELS = {0: "-12", 1: "-18", 2: "-24"}
 KF_LABELS = {i: f"+{i-1024}" if i > 1024 else str(i-1024) for i in range(824, 1225)}
 PITCH_ENV_LEVEL_VALUES = list(range(513, 1536))
@@ -716,14 +751,14 @@ PRESETS = {
                     ("cc", 36): named(("sysex", 0x3000, 10, "1WT", 1, LFO_WAVE_LABELS), "LFO1 Wave Type"),
                     ("cc", 37): ("conditional_sysex", ("note", 42), {
                         0: named((0x3004, 1023, "1RT", 4), "LFO1 Rate"),
-                        1: named((0x3002, 22, "1RN", 1, LFO_RATE_NOTE_LABELS), "LFO1 Rate Note"),
+                        1: named((0x3002, 22, "1RN", 1, list(reversed(range(23))), LFO_RATE_NOTE_LABELS), "LFO1 Rate Note"),
                     }),
                     ("cc", 38): named(("sysex", 0x300B, 1023, "1DT", 4), "LFO1 Delay Time"),
                     ("cc", 39): named(("sysex", 0x3012, 1023, "1FT", 4), "LFO1 Fade Time"),
                     ("cc", 40): named(("sysex", 0x304F, 10, "2WT", 1, LFO_WAVE_LABELS), "LFO2 Wave Type"),
                     ("cc", 41): ("conditional_sysex", ("note", 51), {
                         0: named((0x3053, 1023, "2RT", 4), "LFO2 Rate"),
-                        1: named((0x3052, 22, "2RN", 1, LFO_RATE_NOTE_LABELS), "LFO2 Rate Note"),
+                        1: named((0x3051, 22, "2RN", 1, list(reversed(range(23))), LFO_RATE_NOTE_LABELS), "LFO2 Rate Note"),
                     }),
                     ("cc", 42): named(("sysex", 0x305A, 1023, "2DT", 4), "LFO2 Delay Time"),
                     ("cc", 43): named(("sysex", 0x3061, 1023, "2FT", 4), "LFO2 Fade Time"),
@@ -747,6 +782,37 @@ PRESETS = {
                     ("note", 52): named(("sysex", 0x3065, 1, "2KT", 1, {0: "OFF", 1: "ON"}, "toggle"), "LFO2 Key Trigger"),
                     ("note", 53): named(("cycle_sysex", 0x3060, 3, "2FM", 1, LFO_FADE_MODE_LABELS), "LFO2 Fade Mode"),
                 }
+            },
+            4: {
+                "name": "Matrix 1-4",
+                "mappings": {
+                    ("note", 54): named(("track_select", 1, "T01"), "Track"),
+                    ("note", 55): named(("track_select", 2, "T02"), "Track"),
+                    ("note", 56): named(("track_select", 3, "T03"), "Track"),
+                    ("note", 57): named(("track_select", 4, "T04"), "Track"),
+
+                    ("cc", 54): named(("sysex", 0x2056, 108, "1SC", 1, MATRIX_SOURCE_LABELS), "Matrix 1 Source"),
+                    ("cc", 55): named(("sysex", 0x2057, 48, "1DT", 1, MATRIX_DEST_LABELS), "Matrix 1 Destination 1"),
+                    ("cc", 63): named(("sysex", 0x2058, 126, "1SN", 1, MATRIX_SENS_VALUES, MATRIX_SENS_LABELS), "Matrix 1 Sens 1"),
+
+                    ("cc", 56): named(("sysex", 0x205F, 108, "2SC", 1, MATRIX_SOURCE_LABELS), "Matrix 2 Source"),
+                    ("cc", 57): named(("sysex", 0x2060, 48, "2DT", 1, MATRIX_DEST_LABELS), "Matrix 2 Destination 1"),
+                    ("cc", 65): named(("sysex", 0x2061, 126, "2SN", 1, MATRIX_SENS_VALUES, MATRIX_SENS_LABELS), "Matrix 2 Sens 1"),
+
+                    ("cc", 58): named(("sysex", 0x2068, 108, "3SC", 1, MATRIX_SOURCE_LABELS), "Matrix 3 Source"),
+                    ("cc", 59): named(("sysex", 0x2069, 48, "3DT", 1, MATRIX_DEST_LABELS), "Matrix 3 Destination 1"),
+                    ("cc", 67): named(("sysex", 0x206A, 126, "3SN", 1, MATRIX_SENS_VALUES, MATRIX_SENS_LABELS), "Matrix 3 Sens 1"),
+
+                    ("cc", 60): named(("sysex", 0x2071, 108, "4SC", 1, MATRIX_SOURCE_LABELS), "Matrix 4 Source"),
+                    ("cc", 61): named(("sysex", 0x2072, 48, "4DT", 1, MATRIX_DEST_LABELS), "Matrix 4 Destination 1"),
+                    ("cc", 69): named(("sysex", 0x2073, 126, "4SN", 1, MATRIX_SENS_VALUES, MATRIX_SENS_LABELS), "Matrix 4 Sens 1"),
+
+                    ("note", 63): named(("partial_select", 1, "P01"), "Partial"),
+                    ("note", 64): named(("partial_select", 2, "P02"), "Partial"),
+                    ("note", 65): named(("partial_select", 3, "P03"), "Partial"),
+                    ("note", 66): named(("partial_select", 4, "P04"), "Partial"),
+                    ("note", 67): named(("dynamic_sysex_track", {1: 0x1002, 2: 0x100B, 3: 0x1014, 4: 0x101D}, 1, "PSW", 1, {0: "OFF", 1: "ON"}, "toggle"), "Partial Switch"),
+                }
             }
         }
     },
@@ -757,7 +823,7 @@ PRESETS = {
         "display_values": True,
         "scenes": {
             1: {
-                "name": "TRACK 2",
+                "name": "Track 2",
                 "mappings": {
                     ("cc", 0): named(("cc", 1, 74, "CUT"), "Cutoff"),
                     ("cc", 1): named(("cc", 1, 71, "RES"), "Resonance"),
