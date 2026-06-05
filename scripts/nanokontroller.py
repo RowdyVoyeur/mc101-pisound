@@ -29,7 +29,7 @@ M8_ROW_NOTE_VELOCITY = 100
 
 # M8 keyboard configuration for Preset 4.
 M8_KEYBOARD_DEFAULT_VELOCITY = 100
-M8_KEYBOARD_MIN_OCTAVE = 0
+M8_KEYBOARD_MIN_OCTAVE = -5
 M8_KEYBOARD_MAX_OCTAVE = 9
 
 # Presets
@@ -106,9 +106,19 @@ param_states = {}
 keyboard_octaves = {}
 keyboard_velocity = M8_KEYBOARD_DEFAULT_VELOCITY
 keyboard_notes_held = {}
+input_notes_held = set()
 active_drum_velocity = 100
 drum_scene_octave_offsets = {1: 0, 2: 0, 3: 0, 4: 0}
 drum_pad_notes_held = {}
+
+# Scale keyboard state for Preset 2, Scene 3.
+# MIDI channel is zero-based internally, so 1 means human MIDI Channel 2.
+scale_keyboard_channel = 1
+scale_keyboard_scale_index = 0
+scale_keyboard_key = 0
+scale_keyboard_velocity = 100
+scale_keyboard_octave = 0
+scale_keyboard_notes_held = {}
 
 # --- VALUE MAPS ---
 OSC_TYPE_LABELS = {0: "PCM", 1: "VA ", 2: "SYN", 3: "SAW", 4: "NOI"}
@@ -366,7 +376,7 @@ def change_keyboard_octave(channel, direction):
 
 def set_keyboard_velocity(value):
     global keyboard_velocity
-    keyboard_velocity = max(1, min(127, int(value)))
+    keyboard_velocity = max(10, min(120, int(value)))
     return keyboard_velocity
 
 
@@ -423,6 +433,175 @@ def build_m8_keyboard_scene(midi_channel, input_offset, velocity_cc):
         )
 
     return mappings
+
+# Scale data from the MC-101 scale list when KEY is C.
+# Intervals are semitone offsets from the selected key.
+SCALE_DEFINITIONS = [
+    ("Chromatic", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    ("Minor (Aeolian)", [0, 2, 3, 5, 7, 8, 10]),
+    ("Major (Ionian)", [0, 2, 4, 5, 7, 9, 11]),
+    ("Dorian", [0, 2, 3, 5, 7, 9, 10]),
+    ("Phrygian", [0, 1, 3, 5, 7, 8, 10]),
+    ("Lydian", [0, 2, 4, 6, 7, 9, 11]),
+    ("Mixolydian", [0, 2, 4, 5, 7, 9, 10]),
+    ("Locrian", [0, 1, 3, 5, 6, 8, 10]),
+    ("Minor Pentatonic", [0, 3, 5, 7, 10]),
+    ("Minor Blues", [0, 3, 5, 6, 7, 10]),
+    ("Bebop Minor (Bebop Dorian)", [0, 2, 3, 4, 5, 7, 9, 10]),
+    ("Harmonic Minor", [0, 2, 3, 5, 7, 8, 11]),
+    ("Melodic Minor", [0, 2, 3, 5, 7, 9, 11]),
+    ("Major Pentatonic", [0, 2, 4, 7, 9]),
+    ("Major Blues", [0, 2, 3, 4, 7, 9]),
+    ("Bebop Major", [0, 2, 4, 5, 7, 8, 9, 11]),
+    ("Altered", [0, 1, 3, 4, 6, 8, 10]),
+    ("Whole Tone", [0, 2, 4, 6, 8, 10]),
+    ("Diminished Whole-Half", [0, 2, 3, 5, 6, 8, 9, 11]),
+    ("Diminished Half-Whole", [0, 1, 3, 4, 6, 7, 9, 10]),
+    ("Gypsy Minor (Hungarian Minor)", [0, 2, 3, 6, 7, 8, 11]),
+    ("Romanian Minor (Ukrainian Dorian)", [0, 2, 3, 6, 7, 9, 10]),
+    ("Spanish 8 Notes", [0, 1, 3, 4, 5, 6, 8, 10]),
+    ("Bhairav Thaat (Mayamalavagowla)", [0, 1, 4, 5, 7, 8, 11]),
+    ("Marva Thaat (Gamanasrama)", [0, 1, 4, 6, 7, 9, 11]),
+    ("Purvi Thaat (Kamavardani)", [0, 1, 4, 6, 7, 8, 11]),
+    ("Todi Thaat (Shubhapantuvarali)", [0, 1, 3, 6, 7, 8, 11]),
+    ("Arabic", [0, 2, 4, 5, 6, 8, 10]),
+    ("Egyptian", [0, 2, 5, 7, 10]),
+    ("Chinese", [0, 4, 6, 7, 11]),
+    ("Pelog", [0, 1, 3, 7, 8]),
+    ("Hirajoshi", [0, 2, 3, 7, 8]),
+    ("Miyakobushi", [0, 1, 5, 7, 8]),
+    ("Ryukyu", [0, 4, 5, 7, 11]),
+]
+
+SCALE_KEYBOARD_BASE_NOTE = 48  # C3
+SCALE_KEYBOARD_MIN_OCTAVE = -5
+SCALE_KEYBOARD_MAX_OCTAVE = 6
+
+
+def clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, int(value)))
+
+
+def cc_to_range(value, minimum, maximum):
+    if maximum <= minimum:
+        return minimum
+    return minimum + int(round((clamp(value, 0, 127) / 127.0) * (maximum - minimum)))
+
+
+def scale_name(index=None):
+    idx = scale_keyboard_scale_index if index is None else index
+    return SCALE_DEFINITIONS[clamp(idx, 0, len(SCALE_DEFINITIONS) - 1)][0]
+
+
+def scale_intervals(index=None):
+    idx = scale_keyboard_scale_index if index is None else index
+    return SCALE_DEFINITIONS[clamp(idx, 0, len(SCALE_DEFINITIONS) - 1)][1]
+
+
+def nearest_scale_root_to_c3(key=None):
+    key_pc = scale_keyboard_key if key is None else key
+    candidates = [note for note in range(128) if note % 12 == key_pc]
+    return min(candidates, key=lambda note: (abs(note - SCALE_KEYBOARD_BASE_NOTE), note))
+
+
+def scale_degree_note(degree, row_octave=0):
+    intervals = scale_intervals()
+    octave = degree // len(intervals)
+    interval = intervals[degree % len(intervals)] + (octave * 12)
+    base = nearest_scale_root_to_c3() + (scale_keyboard_octave * 12) + (row_octave * 12)
+    return clamp(base + interval, 0, 127)
+
+
+def scale_note_label(degree, row_octave=0):
+    return NOTE_NAMES[scale_degree_note(degree, row_octave) % 12]
+
+
+def set_scale_keyboard_channel(value):
+    global scale_keyboard_channel
+    scale_keyboard_channel = cc_to_range(value, 0, 11)
+    return scale_keyboard_channel
+
+
+def set_scale_keyboard_scale(value):
+    global scale_keyboard_scale_index
+    scale_keyboard_scale_index = cc_to_range(value, 0, len(SCALE_DEFINITIONS) - 1)
+    return scale_keyboard_scale_index
+
+
+def set_scale_keyboard_key(value):
+    global scale_keyboard_key
+    scale_keyboard_key = cc_to_range(value, 0, 11)
+    return scale_keyboard_key
+
+
+def set_scale_keyboard_velocity(value):
+    global scale_keyboard_velocity
+    scale_keyboard_velocity = clamp(value, 0, 127)
+    return scale_keyboard_velocity
+
+
+def change_scale_keyboard_octave(direction):
+    global scale_keyboard_octave
+    scale_keyboard_octave = clamp(
+        scale_keyboard_octave + int(direction),
+        SCALE_KEYBOARD_MIN_OCTAVE,
+        SCALE_KEYBOARD_MAX_OCTAVE,
+    )
+    return scale_keyboard_octave
+
+
+def build_scale_keyboard_scene():
+    """Build Preset 2, Scene 3: scale keyboard on nanoKONTROL Scene 3."""
+    mappings = {}
+
+    # Top physical row, C2-G2: higher octave.
+    for degree in range(8):
+        mappings[("note", 36 + degree)] = named(
+            ("scale_note", degree, 1),
+            "Scale Note",
+        )
+
+    mappings[("note", 44)] = named(("scale_octave", 1, "OC+"), "Octave Up")
+
+    # Bottom physical row, A2-E3: always one octave lower than the top row.
+    for degree in range(8):
+        mappings[("note", 45 + degree)] = named(
+            ("scale_note", degree, 0),
+            "Scale Note",
+        )
+
+    mappings[("note", 53)] = named(("scale_octave", -1, "OC-"), "Octave Down")
+
+    mappings[("cc", 41)] = named(("scale_control", "midi_channel", "MID"), "MIDI Channel")
+    mappings[("cc", 42)] = named(("scale_control", "scale", "SCA"), "Scale")
+    mappings[("cc", 43)] = named(("scale_control", "key", "KEY"), "Key")
+    mappings[("cc", 44)] = named(("scale_control", "velocity", "VEL"), "Velocity")
+
+    return mappings
+
+
+AUDIO_ROUTING_OPTIONS = [
+    ("R01", "R01: M8 > MC101"),
+    ("R02", "R02: M8 > MC101 | PiS > MC101"),
+    ("R03", "R03: MC101 > PiS | M8 > PiS"),
+    ("R04", "R04: MC101 > M8 > PiS"),
+    ("R05", "R05: PiS > MC101 > M8 > PiS"),
+    ("R06", "R06: PiS > MC101 > PiS | PiS > M8 > PiS"),
+    ("R07", "R07: PiS > M8 > MC101 > PiS"),
+    ("R08", "R08: PiS to MC101 (L) | M8 > MC101 (R)"),
+]
+
+
+def build_audio_routing_info_scene():
+    """Build Preset 2, Scene 4: routing reference only, no audio routing."""
+    return {
+        ("note", 54 + index): named(
+            ("audio_routing_info", short_name, description),
+            description,
+        )
+        for index, (short_name, description) in enumerate(AUDIO_ROUTING_OPTIONS)
+    }
+
 
 def drum_key_to_pad_number(key):
     """Return MC-101 physical pad number for the standard 16 pad keys."""
@@ -628,6 +807,14 @@ PRESETS = {
                     ("note", 26): named(("midi_transport", "stop", "Stop", "STP"), "Stop"),
                     ("note", 35): named(("midi_transport", "start", "Start", "PLA"), "Play"),
                 }
+            },
+            3: {
+                "name": "Scale Keyboard",
+                "mappings": build_scale_keyboard_scene(),
+            },
+            4: {
+                "name": "Audio Routing",
+                "mappings": build_audio_routing_info_scene(),
             }
         }
     },
@@ -958,37 +1145,37 @@ PRESETS = {
             1: {
                 "name": "Scatter & CH 1",
                 "mappings": {
-                    ("note", 0): named(("note", 12, 60, "P01"), "P01"),
-                    ("note", 1): named(("note", 12, 61, "P02"), "P02"),
-                    ("note", 2): named(("note", 12, 62, "P03"), "P03"),
-                    ("note", 3): named(("note", 12, 63, "P04"), "P04"),
-                    ("note", 4): named(("note", 12, 64, "P05"), "P05"),
-                    ("note", 5): named(("note", 12, 65, "P06"), "P06"),
-                    ("note", 6): named(("note", 12, 66, "P07"), "P07"),
-                    ("note", 7): named(("note", 12, 67, "P08"), "P08"),
-                    ("note", 9): named(("note", 12, 68, "P09"), "P09"),
-                    ("note", 10): named(("note", 12, 69, "P10"), "P10"),
-                    ("note", 11): named(("note", 12, 70, "P11"), "P11"),
-                    ("note", 12): named(("note", 12, 71, "P12"), "P12"),
-                    ("note", 13): named(("note", 12, 72, "P13"), "P13"),
-                    ("note", 14): named(("note", 12, 73, "P14"), "P14"),
-                    ("note", 15): named(("note", 12, 74, "P15"), "P15"),
-                    ("note", 16): named(("note", 12, 75, "P16"), "P16"),
+                    ("note", 0): named(("scatter_note", 12, 60, "P01"), "P01"),
+                    ("note", 1): named(("scatter_note", 12, 61, "P02"), "P02"),
+                    ("note", 2): named(("scatter_note", 12, 62, "P03"), "P03"),
+                    ("note", 3): named(("scatter_note", 12, 63, "P04"), "P04"),
+                    ("note", 4): named(("scatter_note", 12, 64, "P05"), "P05"),
+                    ("note", 5): named(("scatter_note", 12, 65, "P06"), "P06"),
+                    ("note", 6): named(("scatter_note", 12, 66, "P07"), "P07"),
+                    ("note", 7): named(("scatter_note", 12, 67, "P08"), "P08"),
+                    ("note", 9): named(("scatter_note", 12, 68, "P09"), "P09"),
+                    ("note", 10): named(("scatter_note", 12, 69, "P10"), "P10"),
+                    ("note", 11): named(("scatter_note", 12, 70, "P11"), "P11"),
+                    ("note", 12): named(("scatter_note", 12, 71, "P12"), "P12"),
+                    ("note", 13): named(("scatter_note", 12, 72, "P13"), "P13"),
+                    ("note", 14): named(("scatter_note", 12, 73, "P14"), "P14"),
+                    ("note", 15): named(("scatter_note", 12, 74, "P15"), "P15"),
+                    ("note", 16): named(("scatter_note", 12, 75, "P16"), "P16"),
 
                     ("cc", 0): named(("cc", 0, 74, "CUT"), "Cutoff"),
                     ("cc", 1): named(("cc", 0, 71, "RES"), "Resonance"),
                     ("cc", 2): named(("cc", 0, 10, "PAN"), "Pan"),
-                    ("cc", 3): named(("cc", 0, 91, "REV"), "Reverb Send Level"),
-                    ("cc", 4): named(("cc", 0, 93, "DLY"), "Delay Send Level"),
-                    ("cc", 5): named(("cc", 0, 80, "FLT"), "[FILTER] Knob"),
-                    ("cc", 6): named(("cc", 0, 81, "MOD"), "[MOD] Knob"),
-                    ("cc", 7): named(("cc", 0, 82, "FX"), "[FX] Knob"),
-                    ("cc", 8): named(("cc", 0, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 3): named(("cc", 0, 93, "DLY"), "Delay"),
+                    ("cc", 4): named(("cc", 0, 91, "REV"), "Reverb"),
+                    ("cc", 5): named(("cc", 0, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 6): named(("cc", 0, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 7): named(("cc", 0, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 8): named(("cc", 0, 82, "FX"), "[FX] Knob"),
 
                     ("cc", 9): named(("cc", 0, 7, "VOL"), "Volume"),
-                    ("cc", 10): named(("cc", 0, 73, "ATK"), "Attack Time"),
-                    ("cc", 11): named(("cc", 0, 75, "DCY"), "Decay Time"),
-                    ("cc", 12): named(("cc", 0, 72, "REL"), "Release Time"),
+                    ("cc", 10): named(("cc", 0, 73, "ATK"), "Attack"),
+                    ("cc", 11): named(("cc", 0, 75, "DCY"), "Decay"),
+                    ("cc", 12): named(("cc", 0, 72, "REL"), "Release"),
                     ("cc", 13): named(("cc", 0, 1, "MOD"), "Modulation"),
                     ("cc", 14): named(("cc", 0, 5, "POR"), "Portamento Time"),
                     ("cc", 15): named(("cc", 0, 84, "PCT"), "Portamento Control"),
@@ -999,37 +1186,37 @@ PRESETS = {
             2: {
                 "name": "Scatter & CH 2",
                 "mappings": {
-                    ("note", 18): named(("note", 12, 60, "P01"), "P01"),
-                    ("note", 19): named(("note", 12, 61, "P02"), "P02"),
-                    ("note", 20): named(("note", 12, 62, "P03"), "P03"),
-                    ("note", 21): named(("note", 12, 63, "P04"), "P04"),
-                    ("note", 22): named(("note", 12, 64, "P05"), "P05"),
-                    ("note", 23): named(("note", 12, 65, "P06"), "P06"),
-                    ("note", 24): named(("note", 12, 66, "P07"), "P07"),
-                    ("note", 25): named(("note", 12, 67, "P08"), "P08"),
-                    ("note", 27): named(("note", 12, 68, "P09"), "P09"),
-                    ("note", 28): named(("note", 12, 69, "P10"), "P10"),
-                    ("note", 29): named(("note", 12, 70, "P11"), "P11"),
-                    ("note", 30): named(("note", 12, 71, "P12"), "P12"),
-                    ("note", 31): named(("note", 12, 72, "P13"), "P13"),
-                    ("note", 32): named(("note", 12, 73, "P14"), "P14"),
-                    ("note", 33): named(("note", 12, 74, "P15"), "P15"),
-                    ("note", 34): named(("note", 12, 75, "P16"), "P16"),
+                    ("note", 18): named(("scatter_note", 12, 60, "P01"), "P01"),
+                    ("note", 19): named(("scatter_note", 12, 61, "P02"), "P02"),
+                    ("note", 20): named(("scatter_note", 12, 62, "P03"), "P03"),
+                    ("note", 21): named(("scatter_note", 12, 63, "P04"), "P04"),
+                    ("note", 22): named(("scatter_note", 12, 64, "P05"), "P05"),
+                    ("note", 23): named(("scatter_note", 12, 65, "P06"), "P06"),
+                    ("note", 24): named(("scatter_note", 12, 66, "P07"), "P07"),
+                    ("note", 25): named(("scatter_note", 12, 67, "P08"), "P08"),
+                    ("note", 27): named(("scatter_note", 12, 68, "P09"), "P09"),
+                    ("note", 28): named(("scatter_note", 12, 69, "P10"), "P10"),
+                    ("note", 29): named(("scatter_note", 12, 70, "P11"), "P11"),
+                    ("note", 30): named(("scatter_note", 12, 71, "P12"), "P12"),
+                    ("note", 31): named(("scatter_note", 12, 72, "P13"), "P13"),
+                    ("note", 32): named(("scatter_note", 12, 73, "P14"), "P14"),
+                    ("note", 33): named(("scatter_note", 12, 74, "P15"), "P15"),
+                    ("note", 34): named(("scatter_note", 12, 75, "P16"), "P16"),
 
                     ("cc", 18): named(("cc", 1, 74, "CUT"), "Cutoff"),
                     ("cc", 19): named(("cc", 1, 71, "RES"), "Resonance"),
                     ("cc", 20): named(("cc", 1, 10, "PAN"), "Pan"),
-                    ("cc", 21): named(("cc", 1, 91, "REV"), "Reverb Send Level"),
-                    ("cc", 22): named(("cc", 1, 93, "DLY"), "Delay Send Level"),
-                    ("cc", 23): named(("cc", 1, 80, "FLT"), "[FILTER] Knob"),
-                    ("cc", 24): named(("cc", 1, 81, "MOD"), "[MOD] Knob"),
-                    ("cc", 25): named(("cc", 1, 82, "FX"), "[FX] Knob"),
-                    ("cc", 26): named(("cc", 1, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 21): named(("cc", 1, 93, "DLY"), "Delay"),
+                    ("cc", 22): named(("cc", 1, 91, "REV"), "Reverb"),
+                    ("cc", 23): named(("cc", 1, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 24): named(("cc", 1, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 25): named(("cc", 1, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 26): named(("cc", 1, 82, "FX"), "[FX] Knob"),
 
                     ("cc", 27): named(("cc", 1, 7, "VOL"), "Volume"),
-                    ("cc", 28): named(("cc", 1, 73, "ATK"), "Attack Time"),
-                    ("cc", 29): named(("cc", 1, 75, "DCY"), "Decay Time"),
-                    ("cc", 30): named(("cc", 1, 72, "REL"), "Release Time"),
+                    ("cc", 28): named(("cc", 1, 73, "ATK"), "Attack"),
+                    ("cc", 29): named(("cc", 1, 75, "DCY"), "Decay"),
+                    ("cc", 30): named(("cc", 1, 72, "REL"), "Release"),
                     ("cc", 31): named(("cc", 1, 1, "MOD"), "Modulation"),
                     ("cc", 32): named(("cc", 1, 5, "POR"), "Portamento Time"),
                     ("cc", 33): named(("cc", 1, 84, "PCT"), "Portamento Control"),
@@ -1040,37 +1227,37 @@ PRESETS = {
             3: {
                 "name": "Scatter & CH 3",
                 "mappings": {
-                    ("note", 36): named(("note", 12, 60, "P01"), "P01"),
-                    ("note", 37): named(("note", 12, 61, "P02"), "P02"),
-                    ("note", 38): named(("note", 12, 62, "P03"), "P03"),
-                    ("note", 39): named(("note", 12, 63, "P04"), "P04"),
-                    ("note", 40): named(("note", 12, 64, "P05"), "P05"),
-                    ("note", 41): named(("note", 12, 65, "P06"), "P06"),
-                    ("note", 42): named(("note", 12, 66, "P07"), "P07"),
-                    ("note", 43): named(("note", 12, 67, "P08"), "P08"),
-                    ("note", 45): named(("note", 12, 68, "P09"), "P09"),
-                    ("note", 46): named(("note", 12, 69, "P10"), "P10"),
-                    ("note", 47): named(("note", 12, 70, "P11"), "P11"),
-                    ("note", 48): named(("note", 12, 71, "P12"), "P12"),
-                    ("note", 49): named(("note", 12, 72, "P13"), "P13"),
-                    ("note", 50): named(("note", 12, 73, "P14"), "P14"),
-                    ("note", 51): named(("note", 12, 74, "P15"), "P15"),
-                    ("note", 52): named(("note", 12, 75, "P16"), "P16"),
+                    ("note", 36): named(("scatter_note", 12, 60, "P01"), "P01"),
+                    ("note", 37): named(("scatter_note", 12, 61, "P02"), "P02"),
+                    ("note", 38): named(("scatter_note", 12, 62, "P03"), "P03"),
+                    ("note", 39): named(("scatter_note", 12, 63, "P04"), "P04"),
+                    ("note", 40): named(("scatter_note", 12, 64, "P05"), "P05"),
+                    ("note", 41): named(("scatter_note", 12, 65, "P06"), "P06"),
+                    ("note", 42): named(("scatter_note", 12, 66, "P07"), "P07"),
+                    ("note", 43): named(("scatter_note", 12, 67, "P08"), "P08"),
+                    ("note", 45): named(("scatter_note", 12, 68, "P09"), "P09"),
+                    ("note", 46): named(("scatter_note", 12, 69, "P10"), "P10"),
+                    ("note", 47): named(("scatter_note", 12, 70, "P11"), "P11"),
+                    ("note", 48): named(("scatter_note", 12, 71, "P12"), "P12"),
+                    ("note", 49): named(("scatter_note", 12, 72, "P13"), "P13"),
+                    ("note", 50): named(("scatter_note", 12, 73, "P14"), "P14"),
+                    ("note", 51): named(("scatter_note", 12, 74, "P15"), "P15"),
+                    ("note", 52): named(("scatter_note", 12, 75, "P16"), "P16"),
 
                     ("cc", 36): named(("cc", 2, 74, "CUT"), "Cutoff"),
                     ("cc", 37): named(("cc", 2, 71, "RES"), "Resonance"),
                     ("cc", 38): named(("cc", 2, 10, "PAN"), "Pan"),
-                    ("cc", 39): named(("cc", 2, 91, "REV"), "Reverb Send Level"),
-                    ("cc", 40): named(("cc", 2, 93, "DLY"), "Delay Send Level"),
-                    ("cc", 41): named(("cc", 2, 80, "FLT"), "[FILTER] Knob"),
-                    ("cc", 42): named(("cc", 2, 81, "MOD"), "[MOD] Knob"),
-                    ("cc", 43): named(("cc", 2, 82, "FX"), "[FX] Knob"),
-                    ("cc", 44): named(("cc", 2, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 39): named(("cc", 2, 93, "DLY"), "Delay"),
+                    ("cc", 40): named(("cc", 2, 91, "REV"), "Reverb"),
+                    ("cc", 41): named(("cc", 2, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 42): named(("cc", 2, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 43): named(("cc", 2, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 44): named(("cc", 2, 82, "FX"), "[FX] Knob"),
 
                     ("cc", 45): named(("cc", 2, 7, "VOL"), "Volume"),
-                    ("cc", 46): named(("cc", 2, 73, "ATK"), "Attack Time"),
-                    ("cc", 47): named(("cc", 2, 75, "DCY"), "Decay Time"),
-                    ("cc", 48): named(("cc", 2, 72, "REL"), "Release Time"),
+                    ("cc", 46): named(("cc", 2, 73, "ATK"), "Attack"),
+                    ("cc", 47): named(("cc", 2, 75, "DCY"), "Decay"),
+                    ("cc", 48): named(("cc", 2, 72, "REL"), "Release"),
                     ("cc", 49): named(("cc", 2, 1, "MOD"), "Modulation"),
                     ("cc", 50): named(("cc", 2, 5, "POR"), "Portamento Time"),
                     ("cc", 51): named(("cc", 2, 84, "PCT"), "Portamento Control"),
@@ -1081,37 +1268,37 @@ PRESETS = {
             4: {
                 "name": "Scatter & CH 4",
                 "mappings": {
-                    ("note", 54): named(("note", 12, 60, "P01"), "P01"),
-                    ("note", 55): named(("note", 12, 61, "P02"), "P02"),
-                    ("note", 56): named(("note", 12, 62, "P03"), "P03"),
-                    ("note", 57): named(("note", 12, 63, "P04"), "P04"),
-                    ("note", 58): named(("note", 12, 64, "P05"), "P05"),
-                    ("note", 59): named(("note", 12, 65, "P06"), "P06"),
-                    ("note", 60): named(("note", 12, 66, "P07"), "P07"),
-                    ("note", 61): named(("note", 12, 67, "P08"), "P08"),
-                    ("note", 63): named(("note", 12, 68, "P09"), "P09"),
-                    ("note", 64): named(("note", 12, 69, "P10"), "P10"),
-                    ("note", 65): named(("note", 12, 70, "P11"), "P11"),
-                    ("note", 66): named(("note", 12, 71, "P12"), "P12"),
-                    ("note", 67): named(("note", 12, 72, "P13"), "P13"),
-                    ("note", 68): named(("note", 12, 73, "P14"), "P14"),
-                    ("note", 69): named(("note", 12, 74, "P15"), "P15"),
-                    ("note", 70): named(("note", 12, 75, "P16"), "P16"),
+                    ("note", 54): named(("scatter_note", 12, 60, "P01"), "P01"),
+                    ("note", 55): named(("scatter_note", 12, 61, "P02"), "P02"),
+                    ("note", 56): named(("scatter_note", 12, 62, "P03"), "P03"),
+                    ("note", 57): named(("scatter_note", 12, 63, "P04"), "P04"),
+                    ("note", 58): named(("scatter_note", 12, 64, "P05"), "P05"),
+                    ("note", 59): named(("scatter_note", 12, 65, "P06"), "P06"),
+                    ("note", 60): named(("scatter_note", 12, 66, "P07"), "P07"),
+                    ("note", 61): named(("scatter_note", 12, 67, "P08"), "P08"),
+                    ("note", 63): named(("scatter_note", 12, 68, "P09"), "P09"),
+                    ("note", 64): named(("scatter_note", 12, 69, "P10"), "P10"),
+                    ("note", 65): named(("scatter_note", 12, 70, "P11"), "P11"),
+                    ("note", 66): named(("scatter_note", 12, 71, "P12"), "P12"),
+                    ("note", 67): named(("scatter_note", 12, 72, "P13"), "P13"),
+                    ("note", 68): named(("scatter_note", 12, 73, "P14"), "P14"),
+                    ("note", 69): named(("scatter_note", 12, 74, "P15"), "P15"),
+                    ("note", 70): named(("scatter_note", 12, 75, "P16"), "P16"),
 
                     ("cc", 54): named(("cc", 3, 74, "CUT"), "Cutoff"),
                     ("cc", 55): named(("cc", 3, 71, "RES"), "Resonance"),
                     ("cc", 56): named(("cc", 3, 10, "PAN"), "Pan"),
-                    ("cc", 57): named(("cc", 3, 91, "REV"), "Reverb Send Level"),
-                    ("cc", 58): named(("cc", 3, 93, "DLY"), "Delay Send Level"),
-                    ("cc", 59): named(("cc", 3, 80, "FLT"), "[FILTER] Knob"),
-                    ("cc", 60): named(("cc", 3, 81, "MOD"), "[MOD] Knob"),
-                    ("cc", 61): named(("cc", 3, 82, "FX"), "[FX] Knob"),
-                    ("cc", 62): named(("cc", 3, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 57): named(("cc", 3, 93, "DLY"), "Delay"),
+                    ("cc", 58): named(("cc", 3, 91, "REV"), "Reverb"),
+                    ("cc", 59): named(("cc", 3, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 60): named(("cc", 3, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 61): named(("cc", 3, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 62): named(("cc", 3, 82, "FX"), "[FX] Knob"),
 
                     ("cc", 63): named(("cc", 3, 7, "VOL"), "Volume"),
-                    ("cc", 64): named(("cc", 3, 73, "ATK"), "Attack Time"),
-                    ("cc", 65): named(("cc", 3, 75, "DCY"), "Decay Time"),
-                    ("cc", 66): named(("cc", 3, 72, "REL"), "Release Time"),
+                    ("cc", 64): named(("cc", 3, 73, "ATK"), "Attack"),
+                    ("cc", 65): named(("cc", 3, 75, "DCY"), "Decay"),
+                    ("cc", 66): named(("cc", 3, 72, "REL"), "Release"),
                     ("cc", 67): named(("cc", 3, 1, "MOD"), "Modulation"),
                     ("cc", 68): named(("cc", 3, 5, "POR"), "Portamento Time"),
                     ("cc", 69): named(("cc", 3, 84, "PCT"), "Portamento Control"),
@@ -1121,14 +1308,175 @@ PRESETS = {
             }
         }
     },
-        PRESET_8: {
+    PRESET_8: {
         "name": "MC-101",
-        "context": "none",
-        "display_values": False,
-        "scenes": {1: {"name": "Keyboard CH 1", "mappings": {}}}
-    }, 
-}
+        "context": "track",
+        "default_track": 1,
+        "display_values": True,
+        "scenes": {
+            1: {
+                "name": "Keyboard CH 1",
+                "mappings": {
+                    ("cc", 0): named(("cc", 0, 74, "CUT"), "Cutoff"),
+                    ("cc", 1): named(("cc", 0, 71, "RES"), "Resonance"),
+                    ("cc", 2): named(("cc", 0, 10, "PAN"), "Pan"),
+                    ("cc", 3): named(("cc", 0, 93, "DLY"), "Delay"),
+                    ("cc", 4): named(("cc", 0, 91, "REV"), "Reverb"),
+                    ("cc", 5): named(("cc", 0, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 6): named(("cc", 0, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 7): named(("cc", 0, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 8): named(("cc", 0, 82, "FX"), "[FX] Knob"),
+                    ("cc", 9): named(("cc", 0, 7, "VOL"), "Volume"),
+                    ("cc", 10): named(("cc", 0, 73, "ATK"), "Attack"),
+                    ("cc", 11): named(("cc", 0, 75, "DCY"), "Decay"),
+                    ("cc", 12): named(("cc", 0, 72, "REL"), "Release"),
+                    ("cc", 13): named(("cc", 0, 1, "MOD"), "Modulation"),
+                    ("cc", 14): named(("cc", 0, 5, "POR"), "Portamento Time"),
+                    ("cc", 15): named(("cc", 0, 84, "PCT"), "Portamento Control"),
+                    ("cc", 16): named(("cc", 0, 76, "VRT"), "Vibrato Rate"),
+                    ("cc", 17): named(("cc", 0, 77, "VDP"), "Vibrato Depth"),
 
+                    ("note", 9): named(("keyboard_note", 0, 60, "C4"), "C4"),
+                    ("note", 1): named(("keyboard_note", 0, 61, "C#4"), "C#4"),
+                    ("note", 10): named(("keyboard_note", 0, 62, "D4"), "D4"),
+                    ("note", 2): named(("keyboard_note", 0, 63, "D#4"), "D#4"),
+                    ("note", 11): named(("keyboard_note", 0, 64, "E4"), "E4"),
+                    ("note", 12): named(("keyboard_note", 0, 65, "F4"), "F4"),
+                    ("note", 4): named(("keyboard_note", 0, 66, "F#4"), "F#4"),
+                    ("note", 13): named(("keyboard_note", 0, 67, "G4"), "G4"),
+                    ("note", 5): named(("keyboard_note", 0, 68, "G#4"), "G#4"),
+                    ("note", 14): named(("keyboard_note", 0, 69, "A4"), "A4"),
+                    ("note", 6): named(("keyboard_note", 0, 70, "A#4"), "A#4"),
+                    ("note", 15): named(("keyboard_note", 0, 71, "B4"), "B4"),
+                    ("note", 16): named(("keyboard_note", 0, 72, "C5"), "C5"),
+                    ("note", 7): named(("keyboard_modifier", "VEL"), "Velocity +/-"),
+                    ("note", 8): named(("keyboard_octave_or_velocity", 0, 1, "OC+", 7, 10, "VL+", "Velocity Up"), "Octave Up"),
+                    ("note", 17): named(("keyboard_octave_or_velocity", 0, -1, "OC-", 7, -10, "VL-", "Velocity Down"), "Octave Down"),
+                }
+            },
+            2: {
+                "name": "Keyboard CH 2",
+                "mappings": {
+                    ("cc", 18): named(("cc", 1, 74, "CUT"), "Cutoff"),
+                    ("cc", 19): named(("cc", 1, 71, "RES"), "Resonance"),
+                    ("cc", 20): named(("cc", 1, 10, "PAN"), "Pan"),
+                    ("cc", 21): named(("cc", 1, 93, "DLY"), "Delay"),
+                    ("cc", 22): named(("cc", 1, 91, "REV"), "Reverb"),
+                    ("cc", 23): named(("cc", 1, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 24): named(("cc", 1, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 25): named(("cc", 1, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 26): named(("cc", 1, 82, "FX"), "[FX] Knob"),
+                    ("cc", 27): named(("cc", 1, 7, "VOL"), "Volume"),
+                    ("cc", 28): named(("cc", 1, 73, "ATK"), "Attack"),
+                    ("cc", 29): named(("cc", 1, 75, "DCY"), "Decay"),
+                    ("cc", 30): named(("cc", 1, 72, "REL"), "Release"),
+                    ("cc", 31): named(("cc", 1, 1, "MOD"), "Modulation"),
+                    ("cc", 32): named(("cc", 1, 5, "POR"), "Portamento Time"),
+                    ("cc", 33): named(("cc", 1, 84, "PCT"), "Portamento Control"),
+                    ("cc", 34): named(("cc", 1, 76, "VRT"), "Vibrato Rate"),
+                    ("cc", 35): named(("cc", 1, 77, "VDP"), "Vibrato Depth"),
+
+                    ("note", 27): named(("keyboard_note", 1, 60, "C4"), "C4"),
+                    ("note", 19): named(("keyboard_note", 1, 61, "C#4"), "C#4"),
+                    ("note", 28): named(("keyboard_note", 1, 62, "D4"), "D4"),
+                    ("note", 20): named(("keyboard_note", 1, 63, "D#4"), "D#4"),
+                    ("note", 29): named(("keyboard_note", 1, 64, "E4"), "E4"),
+                    ("note", 30): named(("keyboard_note", 1, 65, "F4"), "F4"),
+                    ("note", 22): named(("keyboard_note", 1, 66, "F#4"), "F#4"),
+                    ("note", 31): named(("keyboard_note", 1, 67, "G4"), "G4"),
+                    ("note", 23): named(("keyboard_note", 1, 68, "G#4"), "G#4"),
+                    ("note", 32): named(("keyboard_note", 1, 69, "A4"), "A4"),
+                    ("note", 24): named(("keyboard_note", 1, 70, "A#4"), "A#4"),
+                    ("note", 33): named(("keyboard_note", 1, 71, "B4"), "B4"),
+                    ("note", 34): named(("keyboard_note", 1, 72, "C5"), "C5"),
+                    ("note", 25): named(("keyboard_modifier", "VEL"), "Velocity +/-"),
+                    ("note", 26): named(("keyboard_octave_or_velocity", 1, 1, "OC+", 25, 10, "VL+", "Velocity Up"), "Octave Up"),
+                    ("note", 35): named(("keyboard_octave_or_velocity", 1, -1, "OC-", 25, -10, "VL-", "Velocity Down"), "Octave Down"),
+                }
+            },
+            3: {
+                "name": "Keyboard CH 3",
+                "mappings": {
+                    ("cc", 36): named(("cc", 2, 74, "CUT"), "Cutoff"),
+                    ("cc", 37): named(("cc", 2, 71, "RES"), "Resonance"),
+                    ("cc", 38): named(("cc", 2, 10, "PAN"), "Pan"),
+                    ("cc", 39): named(("cc", 2, 93, "DLY"), "Delay"),
+                    ("cc", 40): named(("cc", 2, 91, "REV"), "Reverb"),
+                    ("cc", 41): named(("cc", 2, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 42): named(("cc", 2, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 43): named(("cc", 2, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 44): named(("cc", 2, 82, "FX"), "[FX] Knob"),
+                    ("cc", 45): named(("cc", 2, 7, "VOL"), "Volume"),
+                    ("cc", 46): named(("cc", 2, 73, "ATK"), "Attack"),
+                    ("cc", 47): named(("cc", 2, 75, "DCY"), "Decay"),
+                    ("cc", 48): named(("cc", 2, 72, "REL"), "Release"),
+                    ("cc", 49): named(("cc", 2, 1, "MOD"), "Modulation"),
+                    ("cc", 50): named(("cc", 2, 5, "POR"), "Portamento Time"),
+                    ("cc", 51): named(("cc", 2, 84, "PCT"), "Portamento Control"),
+                    ("cc", 52): named(("cc", 2, 76, "VRT"), "Vibrato Rate"),
+                    ("cc", 53): named(("cc", 2, 77, "VDP"), "Vibrato Depth"),
+
+                    ("note", 45): named(("keyboard_note", 2, 60, "C4"), "C4"),
+                    ("note", 37): named(("keyboard_note", 2, 61, "C#4"), "C#4"),
+                    ("note", 46): named(("keyboard_note", 2, 62, "D4"), "D4"),
+                    ("note", 38): named(("keyboard_note", 2, 63, "D#4"), "D#4"),
+                    ("note", 47): named(("keyboard_note", 2, 64, "E4"), "E4"),
+                    ("note", 48): named(("keyboard_note", 2, 65, "F4"), "F4"),
+                    ("note", 40): named(("keyboard_note", 2, 66, "F#4"), "F#4"),
+                    ("note", 49): named(("keyboard_note", 2, 67, "G4"), "G4"),
+                    ("note", 41): named(("keyboard_note", 2, 68, "G#4"), "G#4"),
+                    ("note", 50): named(("keyboard_note", 2, 69, "A4"), "A4"),
+                    ("note", 42): named(("keyboard_note", 2, 70, "A#4"), "A#4"),
+                    ("note", 51): named(("keyboard_note", 2, 71, "B4"), "B4"),
+                    ("note", 52): named(("keyboard_note", 2, 72, "C5"), "C5"),
+                    ("note", 43): named(("keyboard_modifier", "VEL"), "Velocity +/-"),
+                    ("note", 44): named(("keyboard_octave_or_velocity", 2, 1, "OC+", 43, 10, "VL+", "Velocity Up"), "Octave Up"),
+                    ("note", 53): named(("keyboard_octave_or_velocity", 2, -1, "OC-", 43, -10, "VL-", "Velocity Down"), "Octave Down"),
+                }
+            },
+            4: {
+                "name": "Keyboard CH 4",
+                "mappings": {
+                    ("cc", 54): named(("cc", 3, 74, "CUT"), "Cutoff"),
+                    ("cc", 55): named(("cc", 3, 71, "RES"), "Resonance"),
+                    ("cc", 56): named(("cc", 3, 10, "PAN"), "Pan"),
+                    ("cc", 57): named(("cc", 3, 93, "DLY"), "Delay"),
+                    ("cc", 58): named(("cc", 3, 91, "REV"), "Reverb"),
+                    ("cc", 59): named(("cc", 3, 83, "SND"), "[SOUND] Knob"),
+                    ("cc", 60): named(("cc", 3, 80, "FLT"), "[FILTER] Knob"),
+                    ("cc", 61): named(("cc", 3, 81, "MOD"), "[MOD] Knob"),
+                    ("cc", 62): named(("cc", 3, 82, "FX"), "[FX] Knob"),
+                    ("cc", 63): named(("cc", 3, 7, "VOL"), "Volume"),
+                    ("cc", 64): named(("cc", 3, 73, "ATK"), "Attack"),
+                    ("cc", 65): named(("cc", 3, 75, "DCY"), "Decay"),
+                    ("cc", 66): named(("cc", 3, 72, "REL"), "Release"),
+                    ("cc", 67): named(("cc", 3, 1, "MOD"), "Modulation"),
+                    ("cc", 68): named(("cc", 3, 5, "POR"), "Portamento Time"),
+                    ("cc", 69): named(("cc", 3, 84, "PCT"), "Portamento Control"),
+                    ("cc", 70): named(("cc", 3, 76, "VRT"), "Vibrato Rate"),
+                    ("cc", 71): named(("cc", 3, 77, "VDP"), "Vibrato Depth"),
+
+                    ("note", 63): named(("keyboard_note", 3, 60, "C4"), "C4"),
+                    ("note", 55): named(("keyboard_note", 3, 61, "C#4"), "C#4"),
+                    ("note", 64): named(("keyboard_note", 3, 62, "D4"), "D4"),
+                    ("note", 56): named(("keyboard_note", 3, 63, "D#4"), "D#4"),
+                    ("note", 65): named(("keyboard_note", 3, 64, "E4"), "E4"),
+                    ("note", 66): named(("keyboard_note", 3, 65, "F4"), "F4"),
+                    ("note", 58): named(("keyboard_note", 3, 66, "F#4"), "F#4"),
+                    ("note", 67): named(("keyboard_note", 3, 67, "G4"), "G4"),
+                    ("note", 59): named(("keyboard_note", 3, 68, "G#4"), "G#4"),
+                    ("note", 68): named(("keyboard_note", 3, 69, "A4"), "A4"),
+                    ("note", 60): named(("keyboard_note", 3, 70, "A#4"), "A#4"),
+                    ("note", 69): named(("keyboard_note", 3, 71, "B4"), "B4"),
+                    ("note", 70): named(("keyboard_note", 3, 72, "C5"), "C5"),
+                    ("note", 61): named(("keyboard_modifier", "VEL"), "Velocity +/-"),
+                    ("note", 62): named(("keyboard_octave_or_velocity", 3, 1, "OC+", 61, 10, "VL+", "Velocity Up"), "Octave Up"),
+                    ("note", 71): named(("keyboard_octave_or_velocity", 3, -1, "OC-", 61, -10, "VL-", "Velocity Down"), "Octave Down"),
+                }
+            }
+        }
+    },
+}
 # --- ROLAND 7-BIT SYSEX MATH HELPERS ---
 def to_7bit_int(address):
     b1, b2, b3, b4 = (address >> 24) & 0x7F, (address >> 16) & 0x7F, (address >> 8) & 0x7F, address & 0x7F
@@ -1470,6 +1818,18 @@ def get_mapping_label(mapping):
         return clean_mapping[3]
     if out_type == "keyboard_velocity":
         return clean_mapping[1]
+    if out_type == "keyboard_modifier":
+        return clean_mapping[1]
+    if out_type == "keyboard_octave_or_velocity":
+        return clean_mapping[3]
+    if out_type == "scale_note":
+        return scale_note_label(clean_mapping[1], clean_mapping[2])
+    if out_type == "scale_octave":
+        return clean_mapping[2]
+    if out_type == "scale_control":
+        return clean_mapping[2]
+    if out_type == "audio_routing_info":
+        return clean_mapping[1]
     if out_type == "cycle_sysex":
         return clean_mapping[3] if len(clean_mapping) > 3 else "---"
 
@@ -1492,7 +1852,13 @@ def get_mapping_name(mapping, fallback=None):
             return drum_key_long_name(shifted_drum_key(clean_mapping[2]))
         if out_type in ("drum_pad_velocity", "drum_scene_octave", "param_mode_toggle"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
-        if out_type in ("keyboard_octave", "keyboard_velocity", "cycle_sysex"):
+        if out_type == "scale_note":
+            return midi_note_name(scale_degree_note(clean_mapping[1], clean_mapping[2]))
+        if out_type in ("scale_octave", "scale_control"):
+            return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
+        if out_type == "audio_routing_info":
+            return clean_mapping[2]
+        if out_type in ("keyboard_octave", "keyboard_velocity", "keyboard_modifier", "keyboard_octave_or_velocity", "cycle_sysex"):
             return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
     return get_configured_parameter_name(mapping, fallback or get_mapping_label(mapping))
 
@@ -1643,6 +2009,31 @@ def release_all_keyboard_notes(out_port):
     for channel, note in keyboard_notes:
         out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
 
+    scale_notes = list(set(scale_keyboard_notes_held.values()))
+    scale_keyboard_notes_held.clear()
+    for channel, note in scale_notes:
+        out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
+
+scatter_notes_held = {}
+
+def send_scatter_note(out_port, lookup_key, channel, note, is_press, velocity=127):
+    """Hold MC-101 Scatter pads while pressed, then release on physical note-off."""
+    held_key = (channel, note, lookup_key)
+
+    if is_press:
+        scatter_notes_held[held_key] = (channel, note)
+        out_port.send(mido.Message("note_on", channel=channel, note=note, velocity=velocity))
+        return
+
+    output_channel, output_note = scatter_notes_held.pop(held_key, (channel, note))
+    out_port.send(mido.Message("note_off", channel=output_channel, note=output_note, velocity=0))
+
+def release_all_scatter_notes(out_port):
+    held_notes = list(set(scatter_notes_held.values()))
+    scatter_notes_held.clear()
+    for channel, note in held_notes:
+        out_port.send(mido.Message("note_off", channel=channel, note=note, velocity=0))
+
 def send_keyboard_note(out_port, lookup_key, channel, base_note, is_press):
     held_key = (channel, lookup_key)
 
@@ -1660,6 +2051,33 @@ def send_keyboard_note(out_port, lookup_key, channel, base_note, is_press):
     output_channel, output_note = keyboard_notes_held.pop(
         held_key,
         (channel, keyboard_output_note(channel, base_note)),
+    )
+    out_port.send(mido.Message(
+        "note_off",
+        channel=output_channel,
+        note=output_note,
+        velocity=0,
+    ))
+    return output_note
+
+
+def send_scale_keyboard_note(out_port, lookup_key, degree, row_octave, is_press):
+    held_key = ("scale", lookup_key)
+
+    if is_press:
+        output_note = scale_degree_note(degree, row_octave)
+        scale_keyboard_notes_held[held_key] = (scale_keyboard_channel, output_note)
+        out_port.send(mido.Message(
+            "note_on",
+            channel=scale_keyboard_channel,
+            note=output_note,
+            velocity=scale_keyboard_velocity,
+        ))
+        return output_note
+
+    output_channel, output_note = scale_keyboard_notes_held.pop(
+        held_key,
+        (scale_keyboard_channel, scale_degree_note(degree, row_octave)),
     )
     out_port.send(mido.Message(
         "note_off",
@@ -1897,6 +2315,11 @@ def main():
             return
 
         is_press = val > 0 if msg.type != "note_off" else False
+        if msg.type in ["note_on", "note_off"]:
+            if is_press:
+                input_notes_held.add(msg.note)
+            else:
+                input_notes_held.discard(msg.note)
         last_interaction_time = time.time()
 
         preset_data = PRESETS.get(active_preset, {})
@@ -2151,6 +2574,92 @@ def main():
                 update_overlay()
             return
 
+        if out_type == "keyboard_modifier":
+            if is_press:
+                last_edited_label = clean_mapping[1]
+                last_edited_name = "Velocity +/-"
+                last_edited_val = None
+                last_edited_text = "Press OC+ or OC-"
+                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
+        if out_type == "keyboard_octave_or_velocity":
+            if is_press:
+                channel = clean_mapping[1]
+                octave_direction = clean_mapping[2]
+                octave_label = clean_mapping[3]
+                modifier_note = clean_mapping[4]
+                velocity_delta = clean_mapping[5]
+                velocity_label = clean_mapping[6]
+                velocity_name = clean_mapping[7]
+                if modifier_note in input_notes_held:
+                    velocity = set_keyboard_velocity(keyboard_velocity + velocity_delta)
+                    last_edited_label = velocity_label
+                    last_edited_name = velocity_name
+                    last_edited_val = velocity
+                    last_edited_text = None
+                    current_line1 = build_edit_line1(last_edited_label, value=velocity, name=last_edited_name)
+                else:
+                    octave = change_keyboard_octave(channel, octave_direction)
+                    last_edited_label = octave_label
+                    last_edited_name = get_mapping_name(mapping)
+                    last_edited_val = octave
+                    last_edited_text = f"+{octave}"
+                    current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
+        if out_type == "scale_control":
+            if msg.type == "control_change":
+                control_name = clean_mapping[1]
+                release_all_keyboard_notes(out_port)
+
+                if control_name == "midi_channel":
+                    selected_channel = set_scale_keyboard_channel(val)
+                    last_edited_text = str(selected_channel + 1)
+                    last_edited_val = None
+                elif control_name == "scale":
+                    selected_scale = set_scale_keyboard_scale(val)
+                    last_edited_text = scale_name(selected_scale)
+                    last_edited_val = None
+                    last_touched_type = "note"
+                elif control_name == "key":
+                    selected_key = set_scale_keyboard_key(val)
+                    last_edited_text = NOTE_NAMES[selected_key]
+                    last_edited_val = None
+                    last_touched_type = "note"
+                elif control_name == "velocity":
+                    selected_velocity = set_scale_keyboard_velocity(val)
+                    last_edited_text = None
+                    last_edited_val = selected_velocity
+                else:
+                    return
+
+                last_edited_label = get_mapping_label(mapping)
+                last_edited_name = get_mapping_name(mapping)
+                current_line1 = build_edit_line1(
+                    last_edited_label,
+                    value=last_edited_val,
+                    text=last_edited_text,
+                    name=last_edited_name,
+                )
+                update_overlay()
+            return
+
+        if out_type == "scale_octave":
+            if is_press:
+                release_all_keyboard_notes(out_port)
+                octave = change_scale_keyboard_octave(clean_mapping[1])
+                last_edited_label = get_mapping_label(mapping)
+                last_edited_name = get_mapping_name(mapping)
+                last_edited_val = None
+                last_edited_text = f"+{octave}" if octave > 0 else str(octave)
+                last_touched_type = "note"
+                current_line1 = build_edit_line1(last_edited_label, text=last_edited_text, name=last_edited_name)
+                update_overlay()
+            return
+
         if out_type == "mc101_scene_bank":
             if is_press:
                 active_mc101_scene_bank = clean_mapping[1]
@@ -2182,10 +2691,23 @@ def main():
                 update_overlay()
             return
 
+        if out_type == "audio_routing_info":
+            if is_press:
+                last_edited_label = clean_mapping[1]
+                last_edited_name = clean_mapping[2]
+                last_edited_val = None
+                last_edited_text = None
+                current_line1 = clean_mapping[2]
+                write_overlay_text(f"{current_line1}\n")
+            return
+
         label = get_mapping_label(mapping)
         mapping_name = get_mapping_name(mapping, label)
 
-        if out_type == "keyboard_note":
+        if out_type == "scale_note":
+            played_note = send_scale_keyboard_note(out_port, lookup_key, clean_mapping[1], clean_mapping[2], is_press)
+            mapping_name = midi_note_name(played_note)
+        elif out_type == "keyboard_note":
             played_note = send_keyboard_note(out_port, lookup_key, clean_mapping[1], clean_mapping[2], is_press)
             if is_press:
                 mapping_name = midi_note_name(played_note)
@@ -2201,6 +2723,8 @@ def main():
                 send_note_pulse(out_port, clean_mapping[1], clean_mapping[2])
             else:
                 send_navigation_note_off(out_port, clean_mapping[1], clean_mapping[2])
+        elif out_type == "scatter_note":
+            send_scatter_note(out_port, lookup_key, clean_mapping[1], clean_mapping[2], is_press, val if val > 0 else 127)
         elif out_type == "m8_button":
             if is_press:
                 send_m8_button_down(out_port, clean_mapping[1], clean_mapping[2])
@@ -2232,6 +2756,7 @@ def main():
         if out_port is not None:
             cleanup_m8_song_row(out_port)
             release_all_keyboard_notes(out_port)
+            release_all_scatter_notes(out_port)
             release_all_navigation_notes(out_port)
         if in_port is not None:
             in_port.close()
