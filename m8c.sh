@@ -1,3 +1,6 @@
+# Copyright 2026 RowdyVoyeur
+# Released under the MIT licence, https://opensource.org/licenses/MIT
+
 #!/bin/bash
 
 # 1. Hardware detection
@@ -19,7 +22,14 @@ else
   echo "nanoKONTROL detected."
 fi
 
-# 2. Start audio bridges
+# 2. Start visuals early
+# Launch the display before the audio bridges so the UI appears sooner.
+pushd /home/patch/mc101-pisound
+./m8c &
+M8C_PID=$!
+popd
+
+# 3. Start audio bridges
 if [ "$MC101_CONNECTED" = true ]; then
   alsa_in -j "MC101_in" -d hw:MC101,DEV=0 -r 44100 -p 64 -n 4 -q 0 -c 10 &
   sleep 0.5
@@ -35,7 +45,7 @@ sleep 0.5
 # Wait for audio bridges to initialize inside JACK safely
 sleep 4
 
-# 3. Start audio routing
+# 4. Start audio routing
 if [ "$MC101_CONNECTED" = true ]; then
   # MC-101 mode
   jack_connect M8_in:capture_1 MC101_out:playback_3 2>/dev/null
@@ -47,13 +57,6 @@ else
   jack_connect M8_in:capture_1 system:playback_1 2>/dev/null
   jack_connect M8_in:capture_2 system:playback_2 2>/dev/null
 fi
-
-# 4. Start visuals
-# Now that USB audio is stable, launch the display
-pushd /home/patch/mc101-pisound
-./m8c &
-M8C_PID=$!
-popd
 
 # 5. Conditional Python scripts
 # Define empty PID variables for safe cleanup later
@@ -86,5 +89,5 @@ killall -s SIGINT alsa_out alsa_in 2>/dev/null
 
 # 8. Shutdown
 # Shutdown after quitting M8C
-# sleep 2
-# sudo shutdown now
+sleep 2
+sudo shutdown now

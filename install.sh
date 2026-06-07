@@ -46,19 +46,34 @@ sudo sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
 sudo locale-gen en_US.UTF-8
 sudo update-locale LC_ALL="en_US.UTF-8" LANGUAGE="en_US"
 
-echo "Optimizing /boot/config.txt (Disabling Onboard Audio, BT, and Wi-Fi)..."
-BOOT_CONFIG="/boot/config.txt"
+echo "Optimizing Raspberry Pi boot config (Disabling Onboard Audio, HDMI Audio, BT, and Wi-Fi)..."
+if [ -f /boot/firmware/config.txt ]; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+else
+    BOOT_CONFIG="/boot/config.txt"
+fi
 
-# Disable onboard audio (replace dtparam=audio=on with dtparam=audio=off)
-sudo sed -i 's/^dtparam=audio=on/dtparam=audio=off/' $BOOT_CONFIG
-# If it wasn't there at all, append it
-grep -q "^dtparam=audio=off" $BOOT_CONFIG || echo "dtparam=audio=off" | sudo tee -a $BOOT_CONFIG > /dev/null
+echo "Using boot config: $BOOT_CONFIG"
 
-# Disable HDMI audio
-sudo sed -i 's/^dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d,noaudio/' $BOOT_CONFIG
+# Disable onboard audio.
+sudo sed -i 's/^dtparam=audio=on/dtparam=audio=off/' "$BOOT_CONFIG"
+grep -q "^dtparam=audio=off" "$BOOT_CONFIG" || echo "dtparam=audio=off" | sudo tee -a "$BOOT_CONFIG" > /dev/null
 
-# Disable Bluetooth and Wi-Fi
-grep -q "^dtoverlay=disable-bt" $BOOT_CONFIG || echo "dtoverlay=disable-bt" | sudo tee -a $BOOT_CONFIG > /dev/null
-grep -q "^dtoverlay=disable-wifi" $BOOT_CONFIG || echo "dtoverlay=disable-wifi" | sudo tee -a $BOOT_CONFIG > /dev/null
+# Disable HDMI audio.
+if grep -q "^dtoverlay=vc4-kms-v3d" "$BOOT_CONFIG"; then
+    sudo sed -i '/^dtoverlay=vc4-kms-v3d/ {
+        /noaudio/! s/$/,noaudio/
+    }' "$BOOT_CONFIG"
+else
+    echo "dtoverlay=vc4-kms-v3d,noaudio" | sudo tee -a "$BOOT_CONFIG" > /dev/null
+fi
 
-echo "Install complete! A reboot is highly recommended to apply config.txt and locale changes."
+# Disable Bluetooth and Wi-Fi.
+grep -q "^dtoverlay=disable-bt" "$BOOT_CONFIG" || echo "dtoverlay=disable-bt" | sudo tee -a "$BOOT_CONFIG" > /dev/null
+grep -q "^dtoverlay=disable-wifi" "$BOOT_CONFIG" || echo "dtoverlay=disable-wifi" | sudo tee -a "$BOOT_CONFIG" > /dev/null
+
+echo "Installing amidiminder routing rules..."
+sudo mkdir -p /usr/local/patchbox-modules/imported/mc101-pisound
+sudo cp /home/patch/mc101-pisound/amidiminder.rules /usr/local/patchbox-modules/imported/mc101-pisound/amidiminder.rules
+
+echo "Install complete! A reboot is highly recommended to apply boot config and locale changes."
