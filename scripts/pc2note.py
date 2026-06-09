@@ -1,5 +1,5 @@
 # Copyright 2026 Ricardo Simoes
-# Released under the MIT licence, https://opensource.org/licenses/MIT
+# SPDX-License-Identifier: MIT
 
 import time
 import sys

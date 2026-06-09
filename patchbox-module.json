@@ -2,7 +2,7 @@
   "name": "mc101-pisound",
   "version": "2.0",
   "description": "Auto start M8C with MC-101 and Pisound routing",
-  "author": "RowdyVoyeur",
+  "author": "Ricardo Simoes",
   "launch_mode": "auto",
   "depends_on": [
     "jack.service",

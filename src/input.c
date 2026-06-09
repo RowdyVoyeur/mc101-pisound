@@ -1,5 +1,6 @@
 //
 // Created by Jonne Kokkonen on 15.4.2025.
+// Modified 2026 by Ricardo Simoes for mc101-pisound integration
 //
 #include "input.h"
 #include "backends/audio.h"

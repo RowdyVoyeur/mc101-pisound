@@ -1,4 +1,5 @@
 // Copyright 2021 Jonne Kokkonen
+// Modified 2026 by Ricardo Simoes for mc101-pisound integration
 // Released under the MIT licence, https://opensource.org/licenses/MIT
 
 #include "render.h"

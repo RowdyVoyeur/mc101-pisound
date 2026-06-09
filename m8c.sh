@@ -1,7 +1,6 @@
-# Copyright 2026 RowdyVoyeur
-# Released under the MIT licence, https://opensource.org/licenses/MIT
-
 #!/bin/bash
+# Copyright 2026 Ricardo Simoes
+# SPDX-License-Identifier: MIT
 
 # 1. Hardware detection
 # Check for MC-101

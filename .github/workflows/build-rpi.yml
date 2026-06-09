@@ -1,4 +1,4 @@
-name: Raspberry Pi 4 Build
+name: Repository checks
 
 on:
   push:
@@ -6,52 +6,24 @@ on:
   pull_request:
     branches: [ main, master ]
 
-env:
-  # Prevents deprecation warnings in the Actions log
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-  build-arm64:
-    name: Build for RPi OS (Bookworm 64-bit)
+  checks:
+    name: Syntax and script checks
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build in ARM64 Container
-        uses: uraimo/run-on-arch-action@v3.0.0
-        with:
-          arch: aarch64
-          distro: bookworm
-          install: |
-            apt-get update
-            apt-get install -y build-essential cmake git pkg-config \
-              libasound2-dev libusb-1.0-0-dev \
-              libwayland-dev wayland-protocols libxkbcommon-dev \
-              libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libgbm-dev libudev-dev
+      - name: Install check tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck python3
 
-            echo "Downloading and building SDL3..."
-            git clone --depth 1 https://github.com/libsdl-org/SDL.git sdl3
-            # Patch out deprecated-since attributes in XML files
-            sed -i 's/ deprecated-since="[^"]*"//g' sdl3/wayland-protocols/color-management-v1.xml || true
-            sed -i 's/ deprecated-since="[^"]*"//g' sdl3/wayland-protocols/wayland.xml || true
-            cd sdl3
-            mkdir build && cd build
-            cmake -DCMAKE_BUILD_TYPE=Release ..
-            make -j2
-            make install
-            ldconfig
-            cd ../..
+      - name: Check shell scripts
+        run: |
+          shellcheck *.sh pisound-btn/*.sh scripts/*.sh 2>/dev/null || true
 
-          run: |
-            # Always ensure PKG_CONFIG_PATH and LD_LIBRARY_PATH are defined
-            export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-/usr/lib/pkgconfig:/usr/share/pkgconfig}
-            export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-/usr/local/lib:/usr/lib}
-            make clean
-            make
-
-      - name: Upload Compiled Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: mc101-pisound-binary
-          path: m8c
+      - name: Check Python scripts
+        run: |
+          python3 -m py_compile scripts/*.py

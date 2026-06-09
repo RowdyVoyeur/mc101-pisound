@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright 2026 Ricardo Simoes
+# SPDX-License-Identifier: MIT
 
 echo "Configuring M8 udev rules..."
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="16c0", ATTR{idProduct}=="048a", MODE="0666", GROUP="plugdev"' | sudo tee /etc/udev/rules.d/50-m8.rules > /dev/null

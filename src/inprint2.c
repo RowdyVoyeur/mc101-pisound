@@ -1,6 +1,7 @@
 // Bitmap font routine originally by driedfruit,
 // https://github.com/driedfruit/SDL_inprint Released into public domain.
 // Modified to support multiple fonts & adding a background to text.
+// Modified 2026 by Ricardo Simoes for mc101-pisound integration.
 
 #include "fonts/fonts.h"
 #include <SDL3/SDL.h>

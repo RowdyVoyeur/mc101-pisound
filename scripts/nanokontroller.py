@@ -1,7 +1,7 @@
-# Copyright 2026 Ricardo Simoes
-# Released under the MIT licence, https://opensource.org/licenses/MIT
-
 #!/usr/bin/env python3
+# Copyright 2026 Ricardo Simoes
+# SPDX-License-Identifier: MIT
+
 import sys
 import time
 import os

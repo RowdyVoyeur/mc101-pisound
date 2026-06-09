@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright 2026 Ricardo Simoes
+# SPDX-License-Identifier: MIT
 
 . /usr/local/pisound/scripts/common/common.sh
 
