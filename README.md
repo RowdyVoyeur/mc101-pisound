@@ -1,8 +1,35 @@
-# mc101-pisound
+# Table of contents
 
-A portable device to add an Audio Input to the Roland MC-101, using Raspberry Pi 4, Blokas Pisound, M8C and a few additional scripts.
+- [About this project](#about-this-project)
+- [Installation](#installation)
 
-M8C is a client for [Dirtywave M8](https://dirtywave.com/) headless mode. While the original [application](https://github.com/laamaa/m8c) is cross-platform and can be built for Linux, Windows, macOS, and Android, **this specific fork is optimized and tested exclusively for the Raspberry Pi 4** (running 64-bit Raspberry Pi OS Bookworm) and is tailored for integration with the Roland MC-101 and PiSound.
+# About this project
+
+## Overview
+
+The mc101-pisound started as an idea for a portable device to add audio input to the Roland MC-101, using a Raspberry Pi 4 and Blokas Pisound. It has since grown into a broader performance and control environment for the MC-101.
+
+Alongside audio routing between the MC-101, Pisound and M8C, it provides a HUD overlay and extended Korg nanoKONTROL mappings for scene launching, scale-based playing and editing of several MC-101 parameters of drum tracks and tone partials.
+
+I will not cover the hardware requirements or build details here. However, I am happy to discuss ideas for this project. Meanwhile, you can see some pictures of the build [here](https://github.com/RowdyVoyeur/mc101-pisound/tree/d63daa4af89a75f2fd9006f445e54cdf5670e21d/images).
+
+## Related resources
+
+Since the Roland MC-101 is a central part of this project, you may find useful the [MC-101 tips and tricks website](https://sites.google.com/view/rolandmc101) I created, covering shortcuts, workflow notes and useful information for this groovebox.
+
+If you also use a Dirtywave M8 or M8 Headless, I have put together a separate [M8 shortcuts, tips and tricks website](https://sites.google.com/view/m8tracker/) with additional notes for this tracker.
+
+## Acknowledgements
+
+This project would not exist without [Timothy Lamb](https://github.com/trash80)'s phenomenal invention, the [Dirtywave M8 Tracker](https://dirtywave.com/products/m8-tracker-model-02). Thank you for developing this fantastic product and for allowing the community to test and play it with the M8 Headless! The M8C is also an essential part of this puzzle. Thank you very much [laamaa](https://github.com/laamaa) for creating [this](https://github.com/laamaa/m8c).
+
+## Compatibility
+
+M8C is a client for [Dirtywave M8](https://dirtywave.com/) headless mode. While the original [application](https://github.com/laamaa/m8c) is cross-platform and can be built for Linux, Windows, macOS and Android, **this repository is optimized and tested exclusively for the Raspberry Pi 4 running 64-bit Bookworm** and is tailored for integration with the Roland MC-101 and Pisound.
+
+It is recommended to use M8 Headless Firmware [6.2.1](https://github.com/Dirtywave/M8HeadlessFirmware/blob/main/Releases/M8_V6_2_1_HEADLESS.hex) or earlier. Newer versions, such as 6.5.1 G or 6.5.2 C are known to have MIDI sync issues with external gear when used with Pisound.
+
+# Installation
 
 ## 1. Install and configure Patchbox OS
 
@@ -157,13 +184,13 @@ patchbox module activate mc101-pisound
 ./m8c
 ```
 
+## 12. Install nktrl_set
+
+nanokontroller.nktrl_set must be installed into Korg nanoKONTROL to ensure the nanokontroller.py works
+
 ## Settings
 
-### Pisound Button
-- [1](https://github.com/RowdyVoyeur/midi-tools/blob/main/midi-to-command/audioconfig03.sh) Click
-
 ### M8 Headless Settings
-- Firmware [6.2.1](https://github.com/Dirtywave/M8HeadlessFirmware/blob/main/Releases/M8_V6_2_1_HEADLESS.hex)
 - Live Quantitize: 10 (16 Steps)
 
 ### M8 Headless MIDI Settings
@@ -187,6 +214,141 @@ patchbox module activate mc101-pisound
 
 ### Roland MC-101 Tempo Settings
 - MstrStepLen: 16 steps (same as on M8)
+
+## Pisounr Audio Routing Modes
+
+The Pisound button can cycle through several JACK audio-routing presets. Each mode clears the current JACK connections before applying the selected route.
+
+1. **M8 to MC-101**
+   Routes the M8 stereo output into the MC-101 USB audio input. If the MC-101 is not connected, the script falls back to Pisound standalone routing.
+
+2. **M8 + Pisound In to MC-101**
+   Routes both the M8 stereo output and the Pisound audio input into the MC-101 USB audio input. If the MC-101 is not connected, the script falls back to Pisound standalone routing.
+
+3. **MC-101 + M8 to Pisound Out**
+   Routes the MC-101 stereo output and the M8 stereo output to the Pisound audio outputs.
+
+4. **MC-101 to M8 to Pisound Out**
+   Routes the MC-101 stereo output into the M8 input, then routes the M8 stereo output to the Pisound audio outputs.
+
+5. **Pisound In to MC-101 to M8 to Pisound Out**
+   Routes the Pisound audio input into the MC-101, then routes the MC-101 output into the M8, and finally routes the M8 output to the Pisound audio outputs.
+
+6. **Pisound In to MC-101 and M8 to Pisound Out**
+   Routes the Pisound audio input into both the MC-101 and the M8, then routes both the MC-101 and M8 outputs to the Pisound audio outputs.
+
+7. **Pisound In to M8 to MC-101 to Pisound Out**
+   Routes the Pisound audio input into the M8, routes the M8 output into the MC-101, and routes the MC-101 output to the Pisound audio outputs.
+
+8. **Split Input to MC-101**
+   Routes the Pisound audio input to the left side of the MC-101 input and the M8 output to the right side of the MC-101 input. If the MC-101 is not connected, the script routes the M8 output to the Pisound audio outputs.
+
+# nanoKONTROL Presets and Scenes
+
+The Korg nanoKONTROL is organised into 8 presets, each containing one or more scenes.
+
+## Preset 1: M8 & MC-101
+
+* **Scene 1: Controller**
+  M8 button controls and MC-101 transport controls.
+
+## Preset 2: M8 & MC-101
+
+* **Scene 1: Live (01-08)**
+  MC-101 scene launch for banks 01-08, plus transport controls.
+
+* **Scene 2: Live (09-16)**
+  MC-101 scene launch for banks 09-16, plus transport controls.
+
+* **Scene 3: Scale Keyboard**
+  Scale-based keyboard control with selectable MIDI channel, scale, key, velocity, and octave.
+
+* **Scene 4: Audio Routing**
+  HUD reference for the available audio-routing options.
+
+## Preset 3: M8
+
+* **Scene 1: Mixer**
+  M8 mute, solo, volume, and CC controls.
+
+* **Scene 2: Performance 1**
+  M8 CC performance controls.
+
+* **Scene 3: Performance 2**
+  M8 CC performance controls.
+
+* **Scene 4: Performance 3**
+  M8 CC performance controls.
+
+## Preset 4: M8
+
+* **Scene 1: Keyboard CH 5**
+  M8 keyboard control on MIDI Channel 5.
+
+* **Scene 2: Keyboard CH 6**
+  M8 keyboard control on MIDI Channel 6.
+
+* **Scene 3: Keyboard CH 7**
+  M8 keyboard control on MIDI Channel 7.
+
+* **Scene 4: Keyboard CH 8**
+  M8 keyboard control on MIDI Channel 8.
+
+## Preset 5: MC-101
+
+* **Scene 1: DRUM T1**
+  MC-101 drum editor for Track 1.
+
+* **Scene 2: DRUM T2**
+  MC-101 drum editor for Track 2.
+
+* **Scene 3: DRUM T3**
+  MC-101 drum editor for Track 3.
+
+* **Scene 4: DRUM T4**
+  MC-101 drum editor for Track 4.
+
+## Preset 6: MC-101
+
+* **Scene 1: Common & Oscillator**
+  MC-101 partial common, oscillator, structure, tuning, pan, level, and partial controls.
+
+* **Scene 2: Filter & Envelope**
+  MC-101 filter, amp envelope, pitch envelope, and related partial controls.
+
+* **Scene 3: LFO 1/2**
+  MC-101 LFO 1 and LFO 2 controls.
+
+* **Scene 4: Matrix 1-4**
+  MC-101 modulation matrix controls for Matrix slots 1-4.
+
+## Preset 7: MC-101
+
+* **Scene 1: Scatter & CH 1**
+  MC-101 scatter pads and MIDI Channel 1 CC controls.
+
+* **Scene 2: Scatter & CH 2**
+  MC-101 scatter pads and MIDI Channel 2 CC controls.
+
+* **Scene 3: Scatter & CH 3**
+  MC-101 scatter pads and MIDI Channel 3 CC controls.
+
+* **Scene 4: Scatter & CH 4**
+  MC-101 scatter pads and MIDI Channel 4 CC controls.
+
+## Preset 8: MC-101
+
+* **Scene 1: Keyboard CH 1**
+  MC-101 keyboard and CC controls on MIDI Channel 1.
+
+* **Scene 2: Keyboard CH 2**
+  MC-101 keyboard and CC controls on MIDI Channel 2.
+
+* **Scene 3: Keyboard CH 3**
+  MC-101 keyboard and CC controls on MIDI Channel 3.
+
+* **Scene 4: Keyboard CH 4**
+  MC-101 keyboard and CC controls on MIDI Channel 4.
 
 
 # `nanokontroller.py` Configuration Guide

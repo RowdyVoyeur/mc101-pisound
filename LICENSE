@@ -23,11 +23,25 @@ SOFTWARE.
 
 -----------
 
-This repository includes original work by Jonne Kokkonen and later modifications and integration scripts by Ricardo Simoes.
+Project note
+
+This repository includes original work by Jonne Kokkonen and later modifications,
+integration scripts, documentation and project-specific configuration by Ricardo
+Simoes.
 
 -----------
 
-The software contains a SLIP command processing routine by Marcin Borowicz (slip.c, slip.h):
+Bundled third-party source code and assets
+
+The repository includes third-party source code and assets that remain under
+their respective licences and notices.
+
+-----------
+
+SLIP command processing routine
+
+The software contains a SLIP command processing routine by Marcin Borowicz
+(slip.c, slip.h):
 
 MIT License
 
@@ -53,38 +67,110 @@ SOFTWARE.
 
 -----------
 
-The software contains a bitmap font rendered from Trash80's original work, https://fontstruct.com/fontstructions/show/413734/stealth57.
-The font (embedded in inline_font.h) is originally licensed under CC-BY-SA 3.0, https://creativecommons.org/licenses/by-sa/3.0/.
-The font is used in this program with the permission of the original author.
+Trash80 bitmap font
+
+The software contains a bitmap font rendered from Trash80's original work:
+https://fontstruct.com/fontstructions/show/413734/stealth57
+
+The font embedded in the source tree is originally licensed under CC-BY-SA 3.0:
+https://creativecommons.org/licenses/by-sa/3.0/
 
 -----------
 
-The software contains portions of public domain code:
-Bitmap font routine by driedfruit, https://github.com/driedfruit/SDL_inprint (SDL2_inprint.h, inprint2.c)
-Serial port code from libserialport's examples (serial.c, serial.h)
+SDL_inprint bitmap font routine
+
+The software contains portions of public domain code from driedfruit's
+SDL_inprint bitmap font routine:
+https://github.com/driedfruit/SDL_inprint
+
+Relevant files include SDL2_inprint.h and inprint2.c. The retained filename
+SDL2_inprint.h reflects the source file's provenance; the current project links
+against SDL3, not SDL2.
 
 -----------
 
-The software contains the Tiny ANSI C ini libary under The MIT License:
-rxi: https://github.com/rxi/ini (ini.h, ini.c)
+libserialport example code
+
+The software may contain serial-port example code derived from libserialport
+examples, including code used by the M8 serial backend.
+
+Source: https://sigrok.org/wiki/Libserialport
+Licence: LGPL-3.0-or-later
 
 -----------
 
-The source distribution contains a copy of SDL Game Controller Database:
-Copyright (C) 1997-2022 Sam Lantinga <slouken@libsdl.org>
-  
-This software is provided 'as-is', without any express or implied
-warranty.  In no event will the authors be held liable for any damages
-arising from the use of this software.
+rxi/ini
 
-Permission is granted to anyone to use this software for any purpose,
-including commercial applications, and to alter it and redistribute it
-freely, subject to the following restrictions:
-  
-1. The origin of this software must not be misrepresented; you must not
-   claim that you wrote the original software. If you use this software
-   in a product, an acknowledgment in the product documentation would be
-   appreciated but is not required. 
-2. Altered source versions must be plainly marked as such, and must not be
-   misrepresented as being the original software.
-3. This notice may not be removed or altered from any source distribution.
+The software contains the Tiny ANSI C INI parser by rxi.
+
+Source: https://github.com/rxi/ini
+Licence: MIT
+Copyright (c) 2016 rxi
+
+
+-----------
+
+External dependencies
+
+This project depends on third-party software that is installed separately or
+built during setup. These dependencies remain under their own licences.
+
+-----------
+
+SDL3
+
+Used for display, input, and platform integration.
+
+Source: https://github.com/libsdl-org/SDL
+Licence: zlib
+
+-----------
+
+SDL3_ttf
+
+Used for TrueType font rendering.
+
+Source: https://github.com/libsdl-org/SDL_ttf
+Licence: zlib
+
+SDL3_ttf may use additional third-party libraries, such as FreeType, HarfBuzz,
+PlutoSVG, and PlutoVG, under their respective licences depending on how it is
+built and distributed.
+
+-----------
+
+libusb
+
+Used for USB device access.
+
+Source: https://github.com/libusb/libusb
+Licence: LGPL-2.1-or-later
+
+-----------
+
+Mido
+
+Used by the Python scripts for MIDI message creation, stream handling, virtual
+ports, and message parsing.
+
+Source: https://github.com/mido/mido
+Licence: MIT
+Copyright (c) 2013 Ole Martin Bjorndalen
+Copyright (c) 2023 Raphael Doursenaud
+
+-----------
+
+python-rtmidi
+
+Used as the backend module for real-time MIDI input/output from Python.
+
+Source: https://github.com/SpotlightKid/python-rtmidi
+Licence: MIT
+Copyright (c) 2012-2023 Christopher Arndt
+
+python-rtmidi includes or wraps RtMidi:
+
+RtMidi: realtime MIDI input/output C++ classes
+Source: https://github.com/thestk/rtmidi
+Licence: Modified MIT
+Copyright (c) 2003-2019 Gary P. Scavone
