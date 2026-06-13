@@ -160,7 +160,7 @@ git clone https://github.com/RowdyVoyeur/mc101-pisound.git
 cd mc101-pisound
 ```
 
-Ans then, run the build with:
+And then, run the build with:
 
 ```
 make clean
@@ -195,11 +195,11 @@ Ensure you are in the mc101-pisound directory and use the following command to r
 
 ## 10. Final configurations
 
-For the nanoKONTROL integration to work correctly, install [`nanokontroller.nktrl_set`](assets/nanokontroller.nktrl_set) on the Korg nanoKONTROL and run [`nanokontroller.py`](scripts/nanokontroller.py) on the Raspberry Pi.
+For the nanoKONTROL integration to work correctly, install [nanokontroller.nktrl_set](assets/nanokontroller.nktrl_set) on the Korg nanoKONTROL and run [nanokontroller.py](scripts/nanokontroller.py) on the Raspberry Pi.
 
-The nanoKONTROL mappings can be customised using the information in [`config-guide.md`](scripts/config-guide.md), together with the Roland MC-101 System Exclusive message notes documented in [`mc101-sysex.md`](scripts/mc101-sysex.md).
+The nanoKONTROL mappings can be customised using the information in [config-guide.md](scripts/config-guide.md), together with the Roland MC-101 System Exclusive message notes documented in [mc101-sysex.md](scripts/mc101-sysex.md).
 
-It is also recommended to use the [M8 template song](assets/TEMPLATE.m8s) included in the repository’s [`assets`](assets/) folder.
+It's also recommended to use the [M8 template song](assets/TEMPLATE.m8s) included in the repository’s [assets](assets/) folder.
 
 
 ## Recommended settings
@@ -208,12 +208,7 @@ The following additional settings are recommended to ensure full integration bet
 
 | Device | Section | Setting | Value |
 |---|---|---|---|
-| M8 | Project | Live Quantize | 10 (16 steps) |
-| M8 | MIDI | Sync In | Transport |
-| M8 | MIDI | Sync Out | Clock |
-| M8 | MIDI | Rec. Note Chan | 14 |
-| M8 | MIDI | CC Map Chan | 16 |
-| M8 | MIDI | Song Row Cue Ch | 15 |
+| MC-101 | System (CTRL) | USB Drv | VENDOR |
 | MC-101 | System (MIDI) | Sync Src | USB |
 | MC-101 | System (MIDI) | Sync Out | ON |
 | MC-101 | System (MIDI) | SyncOut USB | ON |
@@ -225,6 +220,12 @@ The following additional settings are recommended to ensure full integration bet
 | MC-101 | System (MIDI) | Ctrl Rx | ON |
 | MC-101 | System (MIDI) | Rx Scatter | ON |
 | MC-101 | Tempo | MstrStepLen | 16 (same as M8) |
+| M8 | Project | Live Quantize | 10 (16 steps) |
+| M8 | MIDI | Sync In | Transport |
+| M8 | MIDI | Sync Out | Clock |
+| M8 | MIDI | Rec. Note Chan | 14 |
+| M8 | MIDI | CC Map Chan | 16 |
+| M8 | MIDI | Song Row Cue Ch | 15 |
 
 ## Pisound audio routing modes
 
