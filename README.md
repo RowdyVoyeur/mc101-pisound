@@ -196,7 +196,7 @@ Test the application, ensuring both the display and audio are working correctly.
 
 ## 10. Final configurations
 
-Quit the application, and edit config.ini with the following command:
+Quit the application, and edit `config.ini` with the following command:
 
 ```
 cd /home/patch/.local/share/m8c/
