@@ -1192,8 +1192,10 @@ SDL_SetTextureScaleMode(overlay_texture, SDL_SCALEMODE_NEAREST);
   // --------------------
 
   SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "1");
-  renderer_fix_texture_scaling_after_window_resize(conf); 
-
+  renderer_fix_texture_scaling_after_window_resize(conf);
+    
+  SDL_HideCursor();
+    
   dirty = 1;
   SDL_PumpEvents();
   render_screen(conf);
