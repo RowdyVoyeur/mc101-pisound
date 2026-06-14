@@ -58,25 +58,29 @@ ssh patch@patchbox.local
 
 ## 2. Configure Patchbox OS
 
-Follow the Setup Wizard instructions of the `Patchbox Configuration Utility`:
+During the [first run](https://blokas.io/patchbox-os/docs/first-run-options/), follow the instructions of the [Setup Wizard](https://blokas.io/patchbox-os/docs/setup-wizard/):
 
 - If prompted, start by updating Patchbox OS;
 
 - Then, for security reasons, change the default password;
 
+- Select Pisound as the default sound card;
+
 - Use the following audio settings: `Sampling Rate` of 48,000 Hz, a `Buffer Size` of 64 and a `Period` of 4;
 
 - Choose the boot environment `Console Autologin`;
 
-- When prompted, configure Wi-Fi;
+- If you intend to use it, configure Wi-Fi;
 
 - Select `None: Default Patchbox OS Environment` to disable modules.
 
-Once the Setup Wizard is finished, type `patchbox` to enter the `Patchbox Configuration Utility` and stop Bluetooth, then disconnect Wi-Fi from default network and disable WiFi hotspot.
+Once the Setup Wizard is finished, type `patchbox` to enter the `Patchbox Configuration Utility` and do the following:
 
-Still in the `Patchbox Configuration Utility`, go to `kernel` and select `install-rt switch te current kernel to realtime one` to enable the RT kernel.
+- Stop Bluetooth, disable Wi-Fi hotspot and disconnect Wi-Fi;
 
-Finally, reboot with ```sudo reboot```.
+- Go to `kernel` and select `install-rt switch te current kernel to realtime one` to enable the RT kernel.
+
+Reboot with ```sudo reboot```, login with ```ssh patch@patchbox.local``` and return to the `Patchbox Configuration Utility` to confirm the RT kernel has been installed. Go to `kernel` and look for `It's a realtime kernel`.
 
 ## 3. Install dependencies
 
@@ -169,7 +173,7 @@ make
 
 ## 8. Install the Patchbox Module
 
-To run everything automatically and manage the audio/MIDI routing, install the custom Patchbox module included in this repository.
+To run everything automatically and manage the audio/MIDI routing, [install](install.sh) the custom [Patchbox Module](patchbox-module.json) included in this repository.
 
 This installation script will automatically configure the required USB udev rules for the M8, so you do not need to set them manually.
 
@@ -179,30 +183,42 @@ Run the following command to install the module:
 patchbox module install https://github.com/RowdyVoyeur/mc101-pisound
 ```
 
-Once installed, reboot and then activate the module:
+## 9. Test the application
+
+Reboot and use the following command to run the application:
+
+```
+cd mc101-pisound
+./m8c
+```
+
+Test the application, ensuring both the display and audio are working correctly. If everything is OK, proceed to the last step. Otherwise, review the installation before moving forward.
+
+## 10. Final configurations
+
+Quit the application, and edit config.ini with the following command:
+
+```
+cd /home/patch/.local/share/m8c/
+sudo nano config.ini
+```
+Ensure `fullscreen`is set to `true`, and save the file (Ctrl+X, Y, Enter).
+
+Lastly, activate the Patchbox Module with the following command:
 
 ```
 patchbox module activate mc101-pisound
 ```
 
-## 9. Run the application
+> If you wish to deactivate the module, run `patchbox module deactivate`.
 
-Ensure you are in the mc101-pisound directory and use the following command to run the application:
-
-```
-./m8c
-```
-
-## 10. Final configurations
+## Recommended settings
 
 For the nanoKONTROL integration to work correctly, install [nanokontroller.nktrl_set](assets/nanokontroller.nktrl_set) on the Korg nanoKONTROL and run [nanokontroller.py](scripts/nanokontroller.py) on the Raspberry Pi.
 
-The nanoKONTROL mappings can be customised using the information in [config-guide.md](scripts/config-guide.md), together with the Roland MC-101 System Exclusive message notes documented in [mc101-sysex.md](scripts/mc101-sysex.md).
+>The nanoKONTROL mappings can be customised using the information in [config-guide.md](scripts/config-guide.md), together with the Roland MC-101 System Exclusive message notes documented in [mc101-sysex.md](scripts/mc101-sysex.md).
 
 It's also recommended to use the [M8 template song](assets/TEMPLATE.m8s) included in the repository’s [assets](assets/) folder.
-
-
-## Recommended settings
 
 The following additional settings are recommended to ensure full integration between the nanoKONTROL, MC-101 and M8C:
 
