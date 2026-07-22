@@ -516,7 +516,9 @@ def scale_degree_note(degree, row_octave=0):
 
 
 def scale_note_label(degree, row_octave=0):
-    return NOTE_NAMES[scale_degree_note(degree, row_octave) % 12]
+    # Include the octave in the HUD matrix label so the upper and lower
+    # scale-keyboard rows do not show identical note names.
+    return midi_note_name(scale_degree_note(degree, row_octave))
 
 
 def set_scale_keyboard_channel(value):
