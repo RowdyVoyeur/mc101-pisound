@@ -2,7 +2,9 @@
 
 This document consolidates the Roland MC-101 System Exclusive knowledge gathered while building the nanokontroller.py script.
 
-It focuses on the address model, data encodings and the offsets currently implemented in the script for live editing. Some notes also capture behaviours discovered during testing, including readable-but-not-live aliases and areas that remain uncertain.
+It focuses on the address model, data encodings and the offsets currently implemented in the script for live editing. Some notes also capture behaviours discovered during testing, including readable-but-not-live aliases, confirmed limitations of the MC-101 SysEx implementation, and areas that remain uncertain.
+
+Roland has never published a MIDI implementation for the MC-101. Everything here was derived by probing hardware and by cross-referencing Roland ZEN-Core editor configuration files. Where a statement is verified on hardware it is marked as such; where it is inferred it is marked as unverified.
 
 > **Special thanks to [DrKnackerator](https://github.com/DrKnackeratorStrikesAgain/)** for the excellent Roland ZEN research and tools, especially [Roland-Zen-Decode-XML](https://github.com/DrKnackeratorStrikesAgain/Roland-Zen-Decode-XML). The XML decode pages were a key reference point for matching Fantom/ZEN-Core block offsets to the MC-101 address space.
 
@@ -18,7 +20,15 @@ It focuses on the address model, data encodings and the offsets currently implem
 
 - Preset 7 Scatter and Preset 8 keyboard/CC mappings use ordinary MIDI note/CC messages, not System Exclusive. They are mentioned only to avoid confusing them with SysEx mappings.
 
-## 2. Roland DT1 SysEx format used by the script
+- The MC-101 also answers RQ1 (command 11) read requests, which makes non-destructive address discovery possible. See section 2.2.
+
+- The MC-101 returns an **incorrect address** in its DT1 replies. The exact fault is characterised in section 2.3. Always key your data off the address you requested, never off the address returned.
+
+- The **Drum Inst layer is not reachable over SysEx on the MC-101**. This is why Assign Type and Envelope Mode cannot be edited from a script, even though they appear in the MC-101 menus. See section 9.1 for the evidence.
+
+## 2. SysEx message formats
+
+### 2.1 DT1 writes
 
 F0 41 10 00 00 00 5E 12 aa bb cc dd data... checksum F7
 
@@ -38,6 +48,47 @@ Checksum formula used by the script:
 
 checksum = (128 - (sum(address_bytes + data_bytes) % 128)) % 128
 
+### 2.2 RQ1 read requests
+
+The MC-101 also responds to RQ1 (command 11). This is read-only and is the safe way to explore the address space or to verify a write.
+
+F0 41 10 00 00 00 5E 11 aa bb cc dd ss tt uu vv checksum F7
+
+| **Field**   | **Value / meaning**                     |
+|-------------|-----------------------------------------|
+| 11          | RQ1 data request command                |
+| aa bb cc dd | Four 7-bit address bytes                |
+| ss tt uu vv | Requested size, as a 7-bit packed count |
+| checksum    | Roland checksum over address + size     |
+
+The device replies with a DT1 containing the data. Two behaviours confirmed on hardware:
+
+- If you request **more** bytes than the block holds, the reply is truncated to the real block length. Requesting 128 bytes at 32.40.00.00 returns 25 bytes. This makes block sizes discoverable without knowing them in advance.
+- If an address is not implemented, the device sends **nothing at all**. There is no error reply, so silence is the only negative signal and a generous timeout matters.
+
+Measured reply latency on one unit was 58 ms minimum, 59 ms median, with a single 508 ms outlier over 20 requests. A 200 ms timeout has proven reliable in practice; 600 ms is safe.
+
+### 2.3 The returned-address bug
+
+The MC-101 and MC-707 report an incorrect address in DT1 replies. This is a known, documented fault in these two grooveboxes and is not present in other current Roland products.
+
+The device computes the correct linear address, then emits it as **8-bit packed bytes with each byte masked to 7 bits**, instead of re-encoding it into Roland's 7-bit septet form.
+
+    L = (b1 << 21) | (b2 << 14) | (b3 << 7) | b4
+
+    returned = [(L >> 24) & 0x7F, (L >> 16) & 0x7F, (L >> 8) & 0x7F, L & 0x7F]
+
+Worked example. Requesting 30 00 00 00 gives L = 0x6000000, which is emitted as 06 00 00 00.
+
+This formula was verified against 70 of 70 replies from a live MC-101, and reproduces the example posted publicly by other researchers.
+
+Two consequences:
+
+- The transformation is **lossy**. `L & 0xFF` values of 0x80 and 0x00 both mask to 0x00, so distinct addresses can produce identical reply addresses. Reply addresses cannot be used as a key.
+- Any tool that reassembles a dump using the returned addresses will produce a corrupt result. Match replies to requests by request order instead.
+
+The **request** side is unaffected. The device decodes incoming 7-bit addresses correctly, which is why writes land where expected.
+
 ## 3. Data encodings
 
 | **Script size** | **Encoding**                                                    | **Used for**                                                                 |
@@ -51,7 +102,55 @@ Important practical note: many values displayed as negative or centred values ar
 
 ## 4. Address model
 
-### 4.1 Tone track bases
+### 4.1 Address space overview
+
+A full sweep of the entire address space (all of b1, b2 and b3 from 00 to 7F at b4 = 00) returned 98,512 responding blocks. Only these first address bytes respond on the MC-101:
+
+| **b1**  | **Contents**                                    | **Repeat**                        |
+|---------|-------------------------------------------------|-----------------------------------|
+| 00      | System                                          | single block                      |
+| 10      | Project parameters                              | single group                      |
+| 20 - 28 | Clip parameters                                 | 136 clips, stride 00.08.00.00     |
+| 29      | tail of the clip region                         | single block                      |
+| 30 - 32 | Clip Tone (PCM/EX)                              | 136 tones, stride 00.02.00.00     |
+| 32 - 35 | Clip Rhythm (drum kits)                         | 136 kits, stride 00.03.00.00      |
+| 40 - 41 | SN-style tone                                   |                                   |
+| 50      | Storage: tones                                  | 64 slots                          |
+| 52 - 53 | Storage: drum kits                              | 64 slots                          |
+
+Everything else is silent, including 36 - 39, 42 - 4F, 54 - 7F, 70 and 7A.
+
+The structure matches Roland's Verselab MV-1 configuration, which uses the same bases and strides. The MC-101 exposes a subset of it.
+
+### 4.2 Why the track bases are what they are
+
+Each region holds 136 entries, arranged as 8 tracks x 17 clips. The MV-1 configuration shows that **slot 17 of each track is the track's live, temporary object**. That is why the working track bases are the 17th entry of each group:
+
+| **Track** | **Entry index** | **Tone base** | **Drum base** |
+|-----------|-----------------|---------------|---------------|
+| Track 1   | 16 (0-based)    | 30.20.00.00   | 32.40.00.00   |
+| Track 2   | 33              | 30.42.00.00   | 32.73.00.00   |
+| Track 3   | 50              | 30.64.00.00   | 33.26.00.00   |
+| Track 4   | 67              | 31.06.00.00   | 33.59.00.00   |
+
+The MC-101 only exposes 4 tracks, but the address space is laid out for 8, which is consistent with it sharing a descriptor layout with the MC-707.
+
+### 4.3 Drum kit block inventory
+
+Every one of the 136 drum kits contains exactly 185 addressable blocks, verified on hardware. This inventory is complete, meaning there is no unaccounted space inside a kit slot:
+
+| **Offset from kit base** | **Block**                    | **Count** | **Size** |
+|--------------------------|------------------------------|-----------|----------|
+| 00.00.00.00              | Drum Kit Common              | 1         | 25       |
+| 00.00.01.00              | Drum Kit MFX                 | 1         | 124      |
+| 00.00.02.00              | Drum Kit MFX (continuation)  | 1         | 16       |
+| 00.00.10.00 - 00.00.15.00| Drum Kit Comp 1 - 6          | 6         | 8        |
+| 00.00.16.00 - 00.00.6D.00| Drum Kit Partial, keys 21-108| 88        | 27       |
+| 00.00.6E.00 - 00.01.45.00| Drum Kit Partial EQ, keys 21-108 | 88    | 27       |
+
+The third b2 page of each kit slot (kit base + 00.02.00.00) does not respond at any b3. There is no hidden data there.
+
+### 4.4 Tone track bases
 
 | **Track** | **Base address** |
 |-----------|------------------|
@@ -73,7 +172,7 @@ partial_stride = (partial - 1) * 00.01.00
 | Track 2 Partial 2 Level, offset 00.00.20.00 | 30.42.21.00 |
 | Track 1 Partial 4 Level, offset 00.00.20.00 | 30.20.23.00 |
 
-### 4.2 Tone track/common and PMT-style parameters
+### 4.5 Tone track/common and PMT-style parameters
 
 Mappings labelled sysex_track in the script are track-level or tone-common/structure parameters. They use the selected track base, with partial forced to 1 by the handler. Dynamic partial-switch mappings use a per-partial PMT offset such as 00.00.10.02, 00.00.10.0B, 00.00.10.14 or 00.00.10.1D.
 
@@ -81,7 +180,7 @@ track/common address = tone_track_base[track] + offset
 
 partial switch address = tone_track_base[track] + PMT offset for selected partial
 
-### 4.3 Drum track and drum key bases
+### 4.6 Drum track and drum key bases
 
 | **Drum track** | **Base address** |
 |----------------|------------------|
@@ -312,9 +411,29 @@ The following are useful MC-101 controls in the script, but they are ordinary MI
 
 ## 9. Explored areas and caveats
 
-- Drum Inst Number, Inst Bank and Inst Group ID are documented in the Drum Kit Partial block at +00..+08. They can be written and read back in SysEx dumps, but our MC-101 tests did not make the audible drum pad sound reload live. The current nanoKONTROL script therefore does not expose them as live controls.
+### 9.1 Confirmed limitation: the Drum Inst layer is not reachable
 
-- Drum Kit Partial documented size is 00.00.1B bytes. Each drum key starts on a 00.01.00 stride, leaving unused address space through +7F that could contain undocumented or reserved fields. We did not treat those as confirmed.
+**Assign Type and Envelope Mode cannot be set over SysEx on the MC-101.** Neither can anything else in the Drum Inst structure: the instrument name, Wave settings, WMT velocity control, or the Inst-level Pitch, Filter and Amp envelopes.
+
+This is worth stating clearly because both parameters *are* editable in the MC-101 menus, which naturally suggests they must be addressable. They are not.
+
+Why the confusion arises. The Drum Kit Partial block holds Inst Number, Inst Bank and Inst Group ID at +00 to +08. Those are a *reference* to an instrument, not the instrument itself. The instrument's own parameters live in a separate Drum Inst object.
+
+The evidence, in increasing order of strength:
+
+1. A full sweep of the entire address space found no Drum Inst region anywhere.
+2. The drum kit structure is complete at 185 blocks per kit with nothing unaccounted, so it cannot be hiding inside the kit.
+3. The Roland MV-1 configuration places `ClipRhymInstSet` at **38 00 00 00**, one 128-byte page per key, 88 keys per kit. A targeted probe of the predicted MC-101 equivalent at 38 0B 00 00 through 38 0B 7F 00 returned **0 of 128** replies.
+4. The layer demonstrably exists in the project file. A `.mpj` contains a flat array of 216-byte Inst records, 136 kits x 88 keys = 11,968 records, each beginning with a 16-character instrument name. None of those names appear anywhere in a full SysEx dump.
+5. The author of the Roland ZEN XML decoding tools states independently, in the repository README, that on MC-101 and MC-707 "Drum Inst (separate from the kit) does not seem to work (nor can it be found)".
+
+The same README notes two further regions that do not work on these grooveboxes, matching our sweep exactly: **Project2 (70)** and **ZBCtrl (7A)**, plus UserRhymInstSet, UserSMP and UserMSMP being absent from the storage area.
+
+The only route to these parameters is editing the project file on the SD card and reloading it. That is offline work and cannot be done live during a session.
+
+### 9.2 Other caveats
+
+- Drum Kit Partial documented size is 00.00.1B bytes. Each drum key starts on a 00.01.00 stride, leaving unused address space through +7F. Probing confirmed that space is silent, so it holds nothing addressable.
 
 - Several readable aliases exist on the MC-101. A successful readback does not always mean the UI/audio engine has applied the change. The practical test is: write, read back, and confirm the sound/UI responds.
 
@@ -352,6 +471,40 @@ Address = 32 40 26 09
 Data = 7F  
 Payload for checksum = 32 40 26 09 7F  
 DT1 = F0 41 10 00 00 00 5E 12 32 40 26 09 7F 60 F7
+
+### 10.5 RQ1 example: read Track 1 Pad 1 Drum Kit Partial
+
+Address = 32 40 26 00
+Size = 00 00 01 00 (128 requested; the device will truncate to the real 27)
+Payload for checksum = 32 40 26 00 00 00 01 00
+RQ1 = F0 41 10 00 00 00 5E 11 32 40 26 00 00 00 01 00 6D F7
+
+The reply is a DT1 of 27 data bytes. Its address field will read 06 50 26 00 rather than 32 40 26 00, per section 2.3.
+
+## 11. How this map was verified
+
+Anyone extending this document should use the same method, because a readback alone does not prove a parameter is live.
+
+The reliable technique is a four-pass diff:
+
+1. Capture a baseline of the candidate addresses with RQ1.
+2. Capture again with nothing touched. Bytes that move on their own are noise and must be excluded.
+3. Change one parameter on the MC-101 front panel, then capture again.
+4. Change it back, then capture once more.
+
+A byte is a confirmed match when it changed between passes 1 and 3, returned to its original value in pass 4, and stayed still between passes 1 and 2.
+
+On a stopped MC-101 the drum kit memory proved completely stable, with zero drifting bytes, so pass 2 usually comes back clean.
+
+This method was used to confirm Pad 1 Level at 32.40.26.09, which also established that **Pad 1 is key 37**, and by extension the whole pad-to-key table in section 4.6.
+
+## 12. References
+
+- Olivier Smet's MC-101 address map and full RQ1 scan: https://sites.google.com/site/olivier2smet2/music/mc-101
+- DrKnackerator, Roland-Zen-Decode-XML, including the MV-1 concrete address layout and the MC-101/707 limitations list: https://github.com/DrKnackeratorStrikesAgain/Roland-Zen-Decode-XML
+- ZenInspector, for SVZ and MC-707/101 PRJ file structure: https://splunge.foo/zeninspector/
+- Roland Fantom-06/07/08 MIDI Implementation, useful as a structural reference for ZEN-Core block offsets
+- Public discussion of the returned-address bug: Gearspace MC-707 & MC-101 thread
 
 ## Appendix A. Matrix Source and Destination value maps
 
@@ -485,9 +638,10 @@ These labels are currently used for all four Matrix Source and Destination contr
 
 | **Item**                              | **Value**                                                   |
 |---------------------------------------|-------------------------------------------------------------|
-| Script analysed                       | 384bcfab-73a7-4346-83c9-1dc718ad871c.py                     |
+| Script analysed                       | scripts/nanokontroller.py                                   |
 | Copyright line                        | Copyright 2026 Ricardo Simoes; SPDX-License-Identifier: MIT |
 | MC-101 SysEx model ID used by script  | 00 00 00 5E                                                 |
 | Default device ID                     | 10                                                          |
 | Main SysEx presets                    | Preset 5 Drum editor; Preset 6 Tone editor                  |
 | Non-SysEx but MC-101-oriented presets | Preset 7 Scatter/CC; Preset 8 Keyboard/CC                   |
+| Not reachable over SysEx              | Drum Inst layer, including Assign Type and Envelope Mode    |
