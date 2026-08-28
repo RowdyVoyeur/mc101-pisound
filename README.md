@@ -1,10 +1,9 @@
 # Table of contents
 
-- [About this project](#about-this-project)
+- [About](#about-this-project)
 - [Installation](#installation)
-- [Recommended settings](#recommended-settings)
-- [Pisound audio routing](#pisound-audio-routing-modes)
-- [nanoKONTROL presets](#nanokontrol-presets-and-scenes)
+- [Settings](#recommended-settings)
+- [Usage](#usage)
 
 # About this project
 
@@ -14,7 +13,13 @@ The mc101-pisound started as an idea for a portable device to add audio input to
 
 Alongside audio routing between the MC-101, Pisound and M8C, it provides a HUD overlay and extended Korg nanoKONTROL mappings for scene launching, scale-based playing and editing of several MC-101 parameters of drum tracks and tone partials.
 
-I will not cover the hardware requirements or build details here. However, I am happy to discuss ideas for this project. Meanwhile, you can see some pictures of the build [here](images/).
+I will not cover the hardware requirements or build details here. However, I am happy to discuss ideas for this project. Meanwhile, you can see some pictures below:
+
+| Full setup | M8C enclosure | MIDI in & out | Audio in & out |
+|---|---|---|---|
+| <img src="images/rolandmc101-pisound-02.jpg" alt="The full setup" height="180"> | <img src="images/rolandmc101-pisound-03.jpg" alt="The enclosure running M8C" height="180"> | <img src="images/rolandmc101-pisound-04.jpg" alt="MIDI in and out" height="180"> | <img src="images/rolandmc101-pisound-05.jpg" alt="Audio jacks and the Pisound button" height="180"> |
+
+You can find more pictures [here](https://github.com/RowdyVoyeur/mc101-pisound/blob/main/images).
 
 ## Related resources
 
@@ -84,7 +89,7 @@ Reboot with ```sudo reboot```, login with ```ssh patch@patchbox.local``` and ret
 
 ## 3. Install dependencies
 
-Install the libraries required by SLD3 and m8c:
+Install the libraries required by SDL3 and m8c:
 
 ```
 sudo apt update
@@ -212,9 +217,9 @@ patchbox module activate mc101-pisound
 
 > If you wish to deactivate the module, run `patchbox module deactivate`.
 
-## Recommended settings
+# Recommended settings
 
-For the nanoKONTROL integration to work correctly, install [nanokontroller.nktrl_set](assets/nanokontroller.nktrl_set) on the Korg nanoKONTROL and run [nanokontroller.py](scripts/nanokontroller.py) on the Raspberry Pi.
+For the nanoKONTROL integration to work correctly, install [nanokontroller.nktrl_set](assets/nanokontroller.nktrl_set) on the Korg nanoKONTROL. The [nanokontroller.py](scripts/nanokontroller.py) script is started automatically at launch whenever a nanoKONTROL is detected.
 
 >The nanoKONTROL mappings can be customised using the information in [config-guide.md](scripts/config-guide.md), together with the Roland MC-101 System Exclusive message notes documented in [mc101-sysex.md](scripts/mc101-sysex.md).
 
@@ -243,22 +248,33 @@ The following additional settings are recommended to ensure full integration bet
 | M8 | MIDI | CC Map Chan | 16 |
 | M8 | MIDI | Song Row Cue Ch | 15 |
 
-## Pisound audio routing modes
+# Usage
 
-The Pisound button can cycle through different JACK [audio-routing presets](pisound-btn/audio_routing.sh):
+## Starting and stopping
 
-| Press | Route |
-|---|---|
-| 1 | M8 → MC-101 |
-| 2 | M8 + Pisound In → MC-101 |
-| 3 | MC-101 + M8 → Pisound Out |
-| 4 | MC-101 → M8 → Pisound Out |
-| 5 | Pisound In → MC-101 → M8 → Pisound Out |
-| 6 | Pisound In → MC-101 + M8 → Pisound Out |
-| 7 | Pisound In → M8 → MC-101 → Pisound Out |
-| 8 | Pisound In → MC-101 Left / M8 → MC-101 Right |
+Once the Patchbox module has been activated, everything starts automatically at boot. `m8c.sh` detects which devices are connected, starts the JACK audio bridges, launches the M8C display and then starts the helper scripts:
 
-# nanoKONTROL presets and scenes
+- `scripts/pc2note.py` starts when the MC-101 is detected
+- `scripts/nanokontroller.py` starts when a nanoKONTROL is detected
+
+> Quitting M8C shuts the Raspberry Pi down. This is intentional, so the unit can be powered off safely without a terminal. To stop the module without shutting down, run `patchbox module deactivate`.
+
+To run it manually instead, use `cd mc101-pisound && ./m8c`.
+
+## The HUD
+
+The overlay drawn on top of the M8C display shows the current preset and scene, and the last parameter you touched with its name and value. When you change preset or scene it briefly shows the title and the controls available in that scene, so you can see what the current layer does without a printed reference.
+
+## nanoKONTROL presets and scenes
+
+Presets are selected on the nanoKONTROL with a two-button combo. Hold the prefix button, then press a selector button within 2 seconds:
+
+- Presets 1 to 4: hold **Rewind**, then Up, Down, Left or Right
+- Presets 5 to 8: hold **Fast Forward**, then Up, Down, Left or Right
+
+The four selector buttons also send M8 cursor movement when pressed on their own. Pressing them as part of a preset combo suppresses the cursor movement.
+
+Scenes are switched using the nanoKONTROL's own scene control. The controller broadcasts its scene change over SysEx and mc101-pisound follows it, updating the HUD and the active mappings. Selecting a preset resets to its first scene.
 
 The Korg nanoKONTROL is organised into 8 [presets](scripts/nanokontroller.py), each containing one or more scenes:
 
@@ -278,3 +294,20 @@ The Korg nanoKONTROL is organised into 8 [presets](scripts/nanokontroller.py), e
 | 6 | MC-101 | 4 | Matrix 1-4 | MC-101 modulation matrix controls for Matrix slots 1-4 |
 | 7 | MC-101 | 1 - 4 | Scatter & CH 1 to CH 4 | MC-101 scatter pads and MIDI Channels 1 to 4 CC controls |
 | 8 | MC-101 | 1 - 4 | Keyboard CH 1 to CH 4 | MC-101 keyboard and CC controls on MIDI Channels 1 to 4 |
+
+## Audio routing
+
+The Pisound button cycles through eight JACK [audio-routing presets](pisound-btn/audio_routing.sh). One click advances to the next mode. Preset 2, Scene 4 shows the same list on the HUD as a reference while you cycle.
+
+Hold the Pisound button for 1 second to reset the routing, and for 3 seconds to reboot.
+
+| Press | Route |
+|---|---|
+| 1 | M8 → MC-101 |
+| 2 | M8 + Pisound In → MC-101 |
+| 3 | MC-101 + M8 → Pisound Out |
+| 4 | MC-101 → M8 → Pisound Out |
+| 5 | Pisound In → MC-101 → M8 → Pisound Out |
+| 6 | Pisound In → MC-101 + M8 → Pisound Out |
+| 7 | Pisound In → M8 → MC-101 → Pisound Out |
+| 8 | Pisound In → MC-101 Left / M8 → MC-101 Right |
